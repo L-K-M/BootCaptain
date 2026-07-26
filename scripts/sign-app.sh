@@ -35,16 +35,20 @@ codesign "${COMMON[@]}" --entitlements "$ROOT/App/BootCaptain.entitlements" "$AP
 codesign --verify --strict --verbose=2 "$HELPER"
 codesign --verify --strict --verbose=2 "$APP"
 
-if [[ -n "${APPLE_TEAM_ID:-}" && "$IDENTITY" != "-" ]]; then
-  for code in "$HELPER" "$APP"; do
-    codesign --display --verbose=4 "$code" 2>&1 | grep -F "TeamIdentifier=$APPLE_TEAM_ID" >/dev/null || {
-      echo "error: $code is not signed by expected Team ID $APPLE_TEAM_ID" >&2
-      exit 1
-    }
-  done
+if [[ "$IDENTITY" != "-" ]]; then
+  APP_TEAM="$(codesign --display --verbose=4 "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+  HELPER_TEAM="$(codesign --display --verbose=4 "$HELPER" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+  [[ -n "$APP_TEAM" && "$APP_TEAM" == "$HELPER_TEAM" ]] || {
+    echo "error: app and helper do not have the same non-empty Team ID" >&2
+    exit 1
+  }
+  if [[ -n "${APPLE_TEAM_ID:-}" && "$APP_TEAM" != "$APPLE_TEAM_ID" ]]; then
+    echo "error: signed Team ID $APP_TEAM does not match expected $APPLE_TEAM_ID" >&2
+    exit 1
+  fi
 
-  APP_REQUIREMENT="$(codesign --display --requirements :- "$APP" 2>&1)"
-  HELPER_REQUIREMENT="$(codesign --display --requirements :- "$HELPER" 2>&1)"
+  APP_REQUIREMENT="$(codesign --display --requirements - "$APP" 2>&1)"
+  HELPER_REQUIREMENT="$(codesign --display --requirements - "$HELPER" 2>&1)"
   [[ "$APP_REQUIREMENT" == *'identifier "ch.lkmc.bootcaptain"'* ]] || {
     echo "error: app designated requirement has an unexpected identifier" >&2
     exit 1

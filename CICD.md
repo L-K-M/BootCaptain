@@ -44,14 +44,18 @@ correctly refuses privileged helper authentication.
 ```sh
 scripts/build.sh
 scripts/build.sh --debug --clean
+scripts/build.sh --clean --install
 scripts/build.sh --zip --dmg
 scripts/build.sh --check
 ```
 
-Artifacts are staged under `dist/`. There is intentionally no install script:
-replacing an application that may have a previously registered privileged helper
-requires a separately reviewed update/unregister lifecycle. Read-only local
-builds should be run from `dist/BootCaptain.app` without registering the helper.
+Artifacts are staged under `dist/`. `--install` quits a running BootCaptain,
+copies the verified bundle to `/Applications` with `ditto`, and reveals it. It
+prefers an installed Apple Development identity (then Developer ID) so app/helper
+mutual authentication and TCC identity are stable; with no Apple identity it
+falls back to an ad-hoc signed read-only build and warns that grants will not
+survive rebuilds. Installation never registers the helper, and privileged
+mutations remain disabled independently of signing.
 
 ## Releases
 
