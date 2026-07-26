@@ -53,6 +53,7 @@ private struct NoMatchesDetail: View {
                 scan.searchText = ""
                 scan.filter = .all
             }
+            .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

@@ -73,7 +73,9 @@ final class ScanViewModel: ObservableObject {
 
     private func reconcileSelection() {
         guard let selection else { return }
-        if !filteredItems.contains(where: { $0.id == selection }) {
+        if !items.contains(where: {
+            $0.id == selection && matchesFilter($0) && matchesSearch($0)
+        }) {
             self.selection = nil
         }
     }
