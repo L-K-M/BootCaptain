@@ -188,21 +188,31 @@ private struct Toolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItemGroup {
-            if scan.isScanning { ProgressView().controlSize(.small) }
             if cleanupCount > 0 {
                 Button { showCleanup = true } label: {
                     Label("Clean Up (\(cleanupCount))", systemImage: "bandage")
                 }
                 .help("Review and fix broken startup leftovers")
             }
+            // Scanning state lives INSIDE the Rescan button (its icon becomes a
+            // spinner) — a bare ProgressView in a ToolbarItemGroup renders as
+            // its own toolbar item and escapes the buttons' capsule.
             Button { scan.scan(diagnose: false) } label: {
-                Label("Rescan", systemImage: "arrow.clockwise")
+                if scan.isScanning {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
+                } else {
+                    Label("Rescan", systemImage: "arrow.clockwise")
+                }
             }
             .disabled(scan.isScanning)
+            .help(scan.isScanning ? "Scanning…" : "Rescan startup items")
             Button { scan.scan(diagnose: true) } label: {
                 Label("Boot Audit", systemImage: "stethoscope")
             }
             .disabled(scan.isScanning)
+            .help("Scan and correlate boot/login failure evidence")
         }
     }
 }
