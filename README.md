@@ -38,14 +38,17 @@ unstable output (`launchctl print`), the code says so and fails soft.
   (*active now*, *execution observed*, *failure evidence*, *configured, not
   observed*, *coverage incomplete*, …). Absence of telemetry never becomes
   "never attempted".
-- **Fail-closed action guidance** — privileged mutation is disabled in this
-  prototype until the durable journal, helper authorization boundary,
-  descriptor-safe target handling, and Phase-0 hardware matrix in `PLAN.md` are
-  complete; the app routes those cases to the owning app or System Settings.
-  The one built-in action is **Clean Up**: provably-broken user-domain leftovers
-  (orphaned `~/Library/LaunchAgents` plists, dead "Open at Login" entries) can
-  be moved to a reversible vault or removed via System Events — as the current
-  user, journaled, with one-click undo, and never touching Apple/managed items.
+- **Fail-closed action guidance** — the launchd/cron state mutations stay
+  disabled until their Phase-0 hardware matrix in `PLAN.md` is complete; the app
+  routes those to the owning app or System Settings. The built-in **Clean Up**
+  action handles provably-broken leftovers reversibly: orphaned
+  `~/Library/LaunchAgents` plists and dead "Open at Login" entries as the
+  current user, and broken `/Library/Launch{Daemons,Agents}` plists through the
+  admin-approved privileged helper — each moved to a reversible vault (never
+  deleted), journaled, with one-click undo, and never touching Apple/managed
+  items. Only the reversible vault move/restore is enabled
+  (`ActionRequest.Operation.isEnabledInCurrentBuild`); it still needs on-device
+  validation before it is considered qualified.
 
 ## Layout
 

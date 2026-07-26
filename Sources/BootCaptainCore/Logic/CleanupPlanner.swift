@@ -9,9 +9,10 @@ import Foundation
 ///   current user owns under their own `~/Library/LaunchAgents`, or removal of
 ///   a classic "Open at Login" entry (System Events). Both have precomputed
 ///   inverses and are journaled by the caller.
-/// - Root-owned sources (e.g. `/Library/LaunchDaemons`) are listed but marked
-///   as requiring the privileged helper, which stays gated until the Phase-0
-///   work in PLAN.md is complete.
+/// - Root-owned sources (e.g. `/Library/LaunchDaemons`) are marked
+///   `requiresHelper`: the reversible move is carried out by the privileged
+///   helper after administrator approval (only the vault move/restore is
+///   enabled — see `ActionRequest.Operation.isEnabledInCurrentBuild`).
 public enum CleanupPlanner {
     public enum Eligibility: String, Codable, Sendable, Equatable {
         /// Move the source file to the user-level vault (reversible, no root).

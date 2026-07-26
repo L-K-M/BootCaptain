@@ -19,7 +19,15 @@ scripts/generate-project.sh
 # reproducible) and every expected icon exists as a non-empty PNG. The build
 # uses the freshly regenerated icons regardless.
 git diff --exit-code -- App/Assets.xcassets/AppIcon.appiconset/Contents.json
-for icon in App/Assets.xcassets/AppIcon.appiconset/icon_*.png; do
+# Expand the glob safely: with nullglob an empty match yields an empty array
+# rather than the literal pattern, so a genuinely icon-less catalog fails on the
+# explicit count check below (a clear message) instead of on a confusing
+# "missing or empty icon: icon_*.png".
+shopt -s nullglob
+icons=(App/Assets.xcassets/AppIcon.appiconset/icon_*.png)
+shopt -u nullglob
+[[ ${#icons[@]} -gt 0 ]] || { echo "error: no icons found in AppIcon.appiconset" >&2; exit 1; }
+for icon in "${icons[@]}"; do
   [[ -s "$icon" ]] || { echo "error: missing or empty icon: $icon" >&2; exit 1; }
   file "$icon" | grep -q 'PNG image data' || { echo "error: not a PNG: $icon" >&2; exit 1; }
 done
