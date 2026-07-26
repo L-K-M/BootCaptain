@@ -9,7 +9,9 @@ struct ContentView: View {
         NavigationSplitView {
             Sidebar()
         } detail: {
-            if let item = scan.item(id: scan.selection) {
+            if scan.isScanning && scan.items.isEmpty {
+                ScanningDetail()
+            } else if let item = scan.item(id: scan.selection) {
                 ItemDetailView(item: item)
             } else {
                 EmptyDetail()
@@ -25,12 +27,25 @@ private struct Sidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Filter", selection: $scan.filter) {
-                ForEach(ScanViewModel.Filter.allCases) { Text($0.rawValue).tag($0) }
+            // A menu-style picker stays compact at any sidebar width; the
+            // five-way segmented control overflowed and clipped its ends.
+            HStack(spacing: 6) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .foregroundStyle(.secondary)
+                Picker("Show", selection: $scan.filter) {
+                    ForEach(ScanViewModel.Filter.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                Spacer()
+                Text("\(scan.filteredItems.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+
+            Divider()
 
             List(selection: $scan.selection) {
                 ForEach(scan.groupedByTier, id: \.0) { tier, items in
@@ -103,6 +118,19 @@ private struct EmptyDetail: View {
             Text("Select an item to see who it belongs to, why it runs, and whether it's safe to disable.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 380)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct ScanningDetail: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView().controlSize(.large)
+            Text("Scanning startup items…").font(.title3.weight(.medium))
+            Text("Reading launchd, Background Task Management, login items, and more.")
+                .font(.callout).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).frame(maxWidth: 360)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

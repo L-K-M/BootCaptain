@@ -164,4 +164,53 @@ final class AttributionEngineHelperTests: XCTestCase {
     func testVendorFromPkgID() {
         XCTAssertEqual(AttributionEngine.vendorFromPkgID("com.microsoft.pkg.autoupdate"), "Microsoft")
     }
+
+    func testReceiptWorthCheckingExcludesSystemPaths() {
+        XCTAssertFalse(AttributionEngine.receiptWorthChecking("/System/Library/LaunchDaemons/com.apple.x.plist"))
+        XCTAssertFalse(AttributionEngine.receiptWorthChecking("/Library/Apple/System/Library/LaunchDaemons/x.plist"))
+        XCTAssertFalse(AttributionEngine.receiptWorthChecking("/usr/libexec/foo"))
+        XCTAssertTrue(AttributionEngine.receiptWorthChecking("/Library/LaunchDaemons/com.acme.helper.plist"))
+        XCTAssertTrue(AttributionEngine.receiptWorthChecking("/Users/alice/Library/LaunchAgents/x.plist"))
+    }
+}
+
+/// A runner that records every invocation so we can assert pkgutil is not spawned
+/// for OS-shipped items (the scan performance fix).
+final class RecordingRunner: CommandRunner, @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var calls: [(String, [String])] = []
+    func run(_ launchPath: String, _ arguments: [String], timeout: TimeInterval) -> ProcessResult {
+        lock.lock(); calls.append((launchPath, arguments)); lock.unlock()
+        return ProcessResult(status: 1, stdout: "", stderr: "", timedOut: false)
+    }
+}
+
+final class AttributionEnginePerfTests: XCTestCase {
+    func testNoPkgutilForSystemItem() {
+        let runner = RecordingRunner()
+        let engine = AttributionEngine(
+            attributions: AttributionsPlistReader(path: "/nonexistent"),
+            receipts: ReceiptInspector(), runner: runner)
+        let item = StartupItem(
+            id: "launchDaemon:com.apple.foo", mechanism: .launchDaemon,
+            label: "com.apple.foo", displayName: "com.apple.foo",
+            sourcePath: "/System/Library/LaunchDaemons/com.apple.foo.plist")
+        _ = engine.attribute(item)
+        XCTAssertFalse(runner.calls.contains { $0.0.contains("pkgutil") },
+                       "pkgutil must not be spawned for a /System item")
+    }
+
+    func testPkgutilForThirdPartyItem() {
+        let runner = RecordingRunner()
+        let engine = AttributionEngine(
+            attributions: AttributionsPlistReader(path: "/nonexistent"),
+            receipts: ReceiptInspector(), runner: runner)
+        let item = StartupItem(
+            id: "launchDaemon:com.acme", mechanism: .launchDaemon,
+            label: "com.acme.helper", displayName: "com.acme.helper",
+            sourcePath: "/Library/LaunchDaemons/com.acme.helper.plist")
+        _ = engine.attribute(item)
+        XCTAssertTrue(runner.calls.contains { $0.0.contains("pkgutil") },
+                      "pkgutil should be consulted for a /Library item")
+    }
 }

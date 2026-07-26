@@ -52,6 +52,18 @@ final class TrustClassifierTests: XCTestCase {
     func testNoSigningIsUnknown() {
         XCTAssertEqual(TrustClassifier.classify(TrustInputs()), .unknown)
     }
+
+    func testSSVItemIsApplePlatformWithoutSigning() {
+        // Sealed System Volume items are Apple by construction, so they classify
+        // without a per-binary signature check (the scan's perf fast path).
+        let input = TrustInputs(signing: [], onSSV: true, label: "com.apple.WindowServer")
+        XCTAssertEqual(TrustClassifier.classify(input), .applePlatform)
+    }
+
+    func testNoSigningOffSSVStaysUnknown() {
+        let input = TrustInputs(signing: [], onSSV: false, label: "com.foo.bar")
+        XCTAssertEqual(TrustClassifier.classify(input), .unknown)
+    }
 }
 
 final class SafetyPolicyTests: XCTestCase {
