@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        launchd plist for the BootCaptain privileged helper. Ships INSIDE the
+        app bundle at Contents/Library/LaunchDaemons and is registered at
+        runtime via SMAppService.daemon(plistName:) — nothing is copied to
+        /Library (PLAN.md §6.4). BundleProgram is resolved relative to the app
+        bundle. The helper is demand-launched (no RunAtLoad / KeepAlive) and
+        exits when idle.
+    -->
+    <key>Label</key>
+    <string>ch.lkmc.bootcaptain.helper</string>
+
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/ch.lkmc.bootcaptain.helper</string>
+
+    <key>MachServices</key>
+    <dict>
+        <key>ch.lkmc.bootcaptain.helper</key>
+        <true/>
+    </dict>
+
+    <key>AssociatedBundleIdentifiers</key>
+    <string>ch.lkmc.bootcaptain</string>
+</dict>
+</plist>

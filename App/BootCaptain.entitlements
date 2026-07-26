@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        BootCaptain is a Developer ID, notarized, NON-sandboxed app: the full
+        feature set (reading /Library and other users' launchd items, running
+        launchctl/sfltool, registering a privileged helper) is incompatible with
+        the App Sandbox (PLAN.md §6.4). Hardened Runtime is on.
+    -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <false/>
+</dict>
+</plist>

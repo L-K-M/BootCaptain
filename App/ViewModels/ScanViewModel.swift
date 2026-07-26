@@ -1,0 +1,86 @@
+import Foundation
+import SwiftUI
+import BootCaptainCore
+import BootCaptainKit
+
+/// Drives scanning and diagnosis off the main actor and publishes results for
+/// the UI. Grouping and filtering live here so the views stay declarative.
+@MainActor
+final class ScanViewModel: ObservableObject {
+    @Published var items: [StartupItem] = []
+    @Published var coverage: CoverageReport = CoverageReport()
+    @Published var isScanning = false
+    @Published var lastScan: Date?
+    @Published var searchText = ""
+    @Published var filter: Filter = .all
+    @Published var selection: StartupItem.ID?
+
+    enum Filter: String, CaseIterable, Identifiable {
+        case all = "All"
+        case thirdParty = "Third-party"
+        case launchesAtLogin = "Launches at login"
+        case orphans = "Orphaned / broken"
+        case failing = "Failure evidence"
+        var id: String { rawValue }
+    }
+
+    func scan(diagnose: Bool) {
+        guard !isScanning else { return }
+        isScanning = true
+        Task.detached(priority: .userInitiated) {
+            let ctx = SystemEnvironment.makeContext()
+            var result = Scanner().scan(ctx, now: Date().timeIntervalSince1970)
+            if diagnose {
+                let diagnosed = DiagnosisEngine().diagnose(items: result.items, ctx: ctx)
+                result = ScanResult(items: diagnosed, coverage: result.coverage,
+                                    generatedAt: result.generatedAt)
+            }
+            await MainActor.run {
+                self.items = result.items
+                self.coverage = result.coverage
+                self.isScanning = false
+                self.lastScan = Date()
+            }
+        }
+    }
+
+    /// Items after search + filter, grouped by tier for the sidebar/list.
+    var filteredItems: [StartupItem] {
+        items.filter { item in
+            matchesFilter(item) && matchesSearch(item)
+        }
+    }
+
+    var groupedByTier: [(Mechanism.Tier, [StartupItem])] {
+        let groups = Dictionary(grouping: filteredItems, by: { $0.mechanism.tier })
+        return [.core, .legacy, .advanced].compactMap { tier in
+            guard let items = groups[tier], !items.isEmpty else { return nil }
+            return (tier, items.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending })
+        }
+    }
+
+    func item(id: StartupItem.ID?) -> StartupItem? {
+        guard let id else { return nil }
+        return items.first { $0.id == id }
+    }
+
+    private func matchesFilter(_ item: StartupItem) -> Bool {
+        switch filter {
+        case .all: return true
+        case .thirdParty:
+            return !(item.trust == .applePlatform || item.trust == .appleDistributed)
+        case .launchesAtLogin: return item.triggers.runsAtStartup
+        case .orphans: return item.health == .possiblyOrphaned || item.health == .broken
+        case .failing: return item.diagnosis?.state == .failureEvidence
+        }
+    }
+
+    private func matchesSearch(_ item: StartupItem) -> Bool {
+        guard !searchText.isEmpty else { return true }
+        let needle = searchText.lowercased()
+        return item.displayName.lowercased().contains(needle)
+            || (item.label?.lowercased().contains(needle) ?? false)
+            || (item.attribution.vendorName?.lowercased().contains(needle) ?? false)
+            || (item.sourcePath?.lowercased().contains(needle) ?? false)
+    }
+}

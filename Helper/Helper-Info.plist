@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Embedded into the helper Mach-O (__TEXT,__info_plist). SMAppService
+        matches the daemon by this identifier, which must equal the launchd
+        plist's Label and the Mach service name.
+    -->
+    <key>CFBundleIdentifier</key>
+    <string>ch.lkmc.bootcaptain.helper</string>
+    <key>CFBundleName</key>
+    <string>BootCaptain Helper</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+</dict>
+</plist>
