@@ -70,11 +70,15 @@ public struct FileJournal: Sendable {
         return record
     }
 
-    /// Convenience: mark a prepared record terminal.
-    public func complete(_ record: JournalRecord, status: JournalStatus, at time: Double) {
+    /// Convenience: mark a prepared record terminal. Returns false if the
+    /// terminal write did not land — the mutation has already happened and must
+    /// NOT be rolled back, but the caller should surface that the on-disk record
+    /// is now stale (it will otherwise resurface as "unfinished" on every launch).
+    @discardableResult
+    public func complete(_ record: JournalRecord, status: JournalStatus, at time: Double) -> Bool {
         var updated = record
         updated.status = status
         updated.completedAt = time
-        write(updated)
+        return write(updated)
     }
 }

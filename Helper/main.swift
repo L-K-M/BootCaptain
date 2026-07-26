@@ -70,7 +70,11 @@ final class HelperService: NSObject, BootCaptainHelperProtocol, @unchecked Senda
                 message: "Could not write the prepared journal record; aborting for safety.")))
         }
         let outcome = runner.perform(request)
-        journal.complete(record, status: outcome.status, at: Date().timeIntervalSince1970)
+        if !journal.complete(record, status: outcome.status, at: Date().timeIntervalSince1970) {
+            // The mutation already ran; nothing to roll back. Surface that the
+            // journal is now stale so the "unfinished" it will report is expected.
+            NSLog("BootCaptain helper: journal completion write failed for \(request.itemID); mutation ran, on-disk record is stale.")
+        }
         reply(HelperCodec.encode(outcome))
     }
 

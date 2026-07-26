@@ -71,7 +71,12 @@ final class CleanupService: ObservableObject {
         let outcome: ActionOutcome
         switch action.candidate.eligibility {
         case .userVaultMove:
-            outcome = await runVaultOperation(inverse)
+            // Undo is itself a file mutation (vault -> original), so it is
+            // journaled exactly like the forward move: no prepared record, no
+            // move. (loginItemRemoval undo is unjournaled by design — System
+            // Events is the source of truth and no vault file is involved; the
+            // requiresHelper path is journaled inside the helper.)
+            outcome = await journaledVaultOperation(inverse)
         case .loginItemRemoval:
             outcome = await addLoginItemBack(path: action.candidate.sourcePath)
         case .requiresHelper:
@@ -93,17 +98,26 @@ final class CleanupService: ObservableObject {
         let request = ActionRequest(
             operation: .moveToVault, itemID: candidate.itemID,
             sourcePath: candidate.sourcePath)
-        // No prepared record on disk -> do not move (same invariant the helper
-        // enforces): a mutation must always be preceded by a durable record.
+        let outcome = await journaledVaultOperation(request)
+        recordResult(candidate, request: request, outcome: outcome)
+    }
+
+    /// Run a user-scope vault operation under prepare -> run -> complete
+    /// journaling, so the "every mutation is preceded by a durable prepared
+    /// record" invariant holds for both the forward move and its undo. If the
+    /// prepared record cannot be written, nothing is moved.
+    private func journaledVaultOperation(_ request: ActionRequest) async -> ActionOutcome {
         guard let record = journal.prepare(request, at: Date().timeIntervalSince1970) else {
-            recordResult(candidate, request: request, outcome: ActionOutcome(
+            return ActionOutcome(
                 status: .aborted,
-                message: "Could not write the prepared journal record; nothing was moved."))
-            return
+                message: "Could not write the prepared journal record; nothing was changed.")
         }
         let outcome = await runVaultOperation(request)
-        journal.complete(record, status: outcome.status, at: Date().timeIntervalSince1970)
-        recordResult(candidate, request: request, outcome: outcome)
+        if !journal.complete(record, status: outcome.status, at: Date().timeIntervalSince1970) {
+            // Mutation already ran; only surface that the record is now stale.
+            NSLog("BootCaptain: journal completion write failed for \(request.itemID); file operation ran, on-disk record is stale.")
+        }
+        return outcome
     }
 
     private func runVaultOperation(_ request: ActionRequest) async -> ActionOutcome {
