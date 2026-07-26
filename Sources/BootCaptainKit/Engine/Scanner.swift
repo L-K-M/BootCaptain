@@ -68,7 +68,14 @@ public struct Scanner: Sendable {
         for var item in raw {
             reconcileState(&item, state: state)
             classifyTrust(&item, ctx: ctx)
-            enrichAttribution(&item)
+            // Apple/system items are the bulk of a real scan and don't need the
+            // subprocess-heavy attribution pipeline (owning-app walk, pkgutil):
+            // give them a cheap identity and move on.
+            if item.trust == .applePlatform || item.trust == .appleDistributed {
+                applyAppleAttribution(&item)
+            } else {
+                enrichAttribution(&item)
+            }
             deriveHealth(&item)
             decideAction(&item)
             // Dedup: prefer the richer record (more provenance) on collision.
@@ -83,6 +90,9 @@ public struct Scanner: Sendable {
         let knownLabels = Set(byID.values.compactMap(\.label))
         for (label, svc) in state.services where !knownLabels.contains(label) {
             if label.hasPrefix("com.apple.") { continue }  // system noise
+            // Transient Launch Services registrations (application.<id>.<asn>)
+            // are per-session app instances, not startup items — skip them.
+            if DisplayPolish.isTransientLaunchdLabel(label) { continue }
             var item = StartupItem(
                 id: "launchd-live:\(label)",
                 mechanism: .launchDaemon,
@@ -128,13 +138,15 @@ public struct Scanner: Sendable {
     }
 
     func classifyTrust(_ item: inout StartupItem, ctx: ScanContext) {
-        // Sign the trust path (script for interpreter items, else the exec).
-        if item.signing.isEmpty, let path = item.recipe?.trustPath ?? item.sourcePath {
-            item.signing = signing.inspect(path: path)
-        }
         let onSSV = (item.sourcePath?.hasPrefix("/System/") ?? false)
         let appleControlled = (item.sourcePath?.hasPrefix("/Library/Apple/") ?? false)
             || (item.sourcePath?.contains("/Cryptexes/") ?? false)
+        // Sign the trust path (script for interpreter items, else the exec) —
+        // but skip it for sealed System Volume items, where location is
+        // authoritative and signing every binary would dominate the scan.
+        if item.signing.isEmpty, !onSSV, let path = item.recipe?.trustPath ?? item.sourcePath {
+            item.signing = signing.inspect(path: path)
+        }
         let managed = item.trust == .managed || item.mechanism == .configurationProfile
             || item.mechanism == .managedBackgroundTask
         let input = TrustInputs(signing: item.signing, onSSV: onSSV,
@@ -144,6 +156,28 @@ public struct Scanner: Sendable {
         if item.trust == .unknown || item.trust == .managed {
             item.trust = TrustClassifier.classify(input)
         }
+    }
+
+    /// Cheap identity for Apple/system items — no subprocess, no bundle walk.
+    func applyAppleAttribution(_ item: inout StartupItem) {
+        item.attribution = ResolvedAttribution(
+            vendorName: "Apple",
+            productName: Self.friendlyAppleName(item.label),
+            confidence: .high)
+        if let product = item.attribution.productName, !product.isEmpty {
+            item.displayName = product
+        }
+    }
+
+    /// "com.apple.WindowServer" -> "WindowServer"; keeps the label if it isn't
+    /// reverse-DNS. Display only.
+    static func friendlyAppleName(_ label: String?) -> String? {
+        guard let label, !label.isEmpty else { return nil }
+        if label.hasPrefix("com.apple.") {
+            let tail = String(label.dropFirst("com.apple.".count))
+            return tail.isEmpty ? label : tail
+        }
+        return label
     }
 
     func enrichAttribution(_ item: inout StartupItem) {
@@ -163,6 +197,10 @@ public struct Scanner: Sendable {
         }
         if !item.attribution.displayTitle.isEmpty, item.attribution.displayTitle != "Unknown item" {
             item.displayName = item.attribution.displayTitle
+        } else if let label = item.label, item.displayName == label {
+            // Nothing resolved: at least prettify the raw reverse-DNS label
+            // (display only — the raw label stays in Details).
+            item.displayName = DisplayPolish.prettifyLabel(label)
         }
     }
 

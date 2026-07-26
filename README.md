@@ -38,10 +38,14 @@ unstable output (`launchctl print`), the code says so and fails soft.
   (*active now*, *execution observed*, *failure evidence*, *configured, not
   observed*, *coverage incomplete*, …). Absence of telemetry never becomes
   "never attempted".
-- **Fail-closed action guidance** — mutation is disabled in this prototype until
-  the durable journal, helper authorization boundary, descriptor-safe target
-  handling, and Phase-0 hardware matrix in `PLAN.md` are complete. The app
-  currently routes users to the owning app or System Settings instead.
+- **Fail-closed action guidance** — privileged mutation is disabled in this
+  prototype until the durable journal, helper authorization boundary,
+  descriptor-safe target handling, and Phase-0 hardware matrix in `PLAN.md` are
+  complete; the app routes those cases to the owning app or System Settings.
+  The one built-in action is **Clean Up**: provably-broken user-domain leftovers
+  (orphaned `~/Library/LaunchAgents` plists, dead "Open at Login" entries) can
+  be moved to a reversible vault or removed via System Events — as the current
+  user, journaled, with one-click undo, and never touching Apple/managed items.
 
 ## Layout
 

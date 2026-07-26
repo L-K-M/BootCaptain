@@ -67,8 +67,10 @@ public struct AttributionEngine: Sendable {
                 weight: AttributionScorer.defaultWeight(for: .appleAttributionsPlist)))
         }
 
-        // 5. Package receipt.
-        if let path = item.sourcePath,
+        // 5. Package receipt. pkgutil is a subprocess, so only run it for paths
+        //    where a third-party installer receipt could plausibly exist — never
+        //    for OS-shipped locations (which would be hundreds of pointless spawns).
+        if let path = item.sourcePath, Self.receiptWorthChecking(path),
            let pkg = receipts.receiptPackage(for: path, runner: runner) {
             signals.append(AttributionSignal(
                 kind: .packageReceipt, vendorName: Self.vendorFromPkgID(pkg),
@@ -124,6 +126,14 @@ public struct AttributionEngine: Sendable {
               let dict = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any]
         else { return nil }
         return dict["CFBundleIdentifier"] as? String
+    }
+
+    /// Whether a package receipt is worth a `pkgutil` spawn for this path.
+    /// Excludes OS-shipped locations, which never carry a third-party receipt.
+    static func receiptWorthChecking(_ path: String) -> Bool {
+        let excluded = ["/System/", "/Library/Apple/", "/usr/", "/bin/", "/sbin/"]
+        if path.contains("/Cryptexes/") { return false }
+        return !excluded.contains { path.hasPrefix($0) }
     }
 
     static func vendorFromPkgID(_ pkg: String) -> String? {

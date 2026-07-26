@@ -38,10 +38,13 @@ public enum TrustClassifier {
         // Management wins over everything except an outright broken signature.
         if input.isManaged { return .managed }
 
-        // No signing facts at all → cannot claim system; grade by location only
-        // as a weak signal, else unknown.
+        // No signing facts at all. The sealed System Volume is cryptographically
+        // sealed by the OS, so an item that lives there is Apple by construction
+        // — we can classify it without paying for a per-binary signature check
+        // (a large win: the SSV holds hundreds of launchd items). Anywhere else,
+        // absence of signing means we cannot claim anything.
         guard !input.signing.isEmpty else {
-            return .unknown
+            return input.onSSV ? .applePlatform : .unknown
         }
 
         // Any slice with an invalid signature is disqualifying.
