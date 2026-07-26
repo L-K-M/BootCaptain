@@ -49,7 +49,7 @@ private struct NoMatchesDetail: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 380)
-            Button("Clear Search and Filters") {
+            Button(resetButtonTitle) {
                 scan.searchText = ""
                 scan.filter = .all
             }
@@ -61,7 +61,16 @@ private struct NoMatchesDetail: View {
         if scan.searchText.isEmpty {
             return "No startup items match the \(scan.filter.rawValue.lowercased()) filter."
         }
+        if scan.filter == .all {
+            return "Nothing matches \"\(scan.searchText)\"."
+        }
         return "Nothing matches \"\(scan.searchText)\" in the \(scan.filter.rawValue.lowercased()) filter."
+    }
+
+    private var resetButtonTitle: String {
+        if scan.searchText.isEmpty { return "Clear Filter" }
+        if scan.filter == .all { return "Clear Search" }
+        return "Clear Search and Filters"
     }
 }
 
