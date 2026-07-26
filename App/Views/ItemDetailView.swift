@@ -105,9 +105,10 @@ struct ItemDetailView: View {
             // without root: reversible vault move / login-item removal.
             if let candidate = cleanupCandidate, !cleanup.completedItemIDs.contains(candidate.itemID) {
                 if candidate.eligibility == .requiresHelper {
-                    Label(cleanupButtonTitle(candidate), systemImage: "lock.shield")
+                    Text(cleanupButtonTitle(candidate))
+                        .font(.headline)
                         .foregroundStyle(.secondary)
-                    Text("Use the Clean Up review to see the prototype warning and explicitly confirm any helper-backed action.")
+                    Text("Open Clean Up from the toolbar to see the prototype warning and explicitly confirm any helper-backed action.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     HStack {
