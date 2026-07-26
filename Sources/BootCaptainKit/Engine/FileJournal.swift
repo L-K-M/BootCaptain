@@ -41,7 +41,16 @@ public struct FileJournal: Sendable {
         return names.filter { $0.hasSuffix(".json") }.compactMap { name in
             let path = directory + "/" + name
             guard let data = fileManager.contents(atPath: path) else { return nil }
-            return try? decoder.decode(JournalRecord.self, from: data)
+            do {
+                return try decoder.decode(JournalRecord.self, from: data)
+            } catch {
+                // A journal file that will not decode (schema drift, disk
+                // corruption) must not vanish silently: unfinished() feeds
+                // startup reconciliation, and a hidden prepared record is the
+                // exact failure reconciliation exists to surface. Log and skip.
+                NSLog("BootCaptain: ignoring undecodable journal record \(name): \(error)")
+                return nil
+            }
         }
     }
 

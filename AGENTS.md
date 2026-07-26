@@ -24,6 +24,10 @@ Read these before changing behavior:
   matrix, so even the enabled move/restore path still needs on-device validation.
 - Read-only use must not register the helper or install persistent components;
   the helper is registered only on the first privileged Clean Up action.
+- The Clean Up undo list and completed-item set are in-memory and session
+  scoped. The vault retains every moved file (nothing is deleted), but the
+  in-app Undo history is not rebuilt from the journal after an app relaunch;
+  reconstructing it on launch is a follow-up, not part of the current scope.
 
 ## Build and verify
 
