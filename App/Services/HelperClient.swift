@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import ServiceManagement
 import BootCaptainCore
 import BootCaptainKit
@@ -21,6 +22,17 @@ final class HelperClient: ObservableObject {
     @Published var status: HelperStatus = .notRegistered
 
     private var connection: NSXPCConnection?
+
+    enum ConnectionError: LocalizedError {
+        case signingIdentityUnavailable
+
+        var errorDescription: String? {
+            switch self {
+            case .signingIdentityUnavailable:
+                return "BootCaptain's signing Team ID is unavailable; refusing the privileged connection."
+            }
+        }
+    }
 
     private var service: SMAppService {
         SMAppService.daemon(plistName: Self.plistName)
@@ -57,7 +69,7 @@ final class HelperClient: ObservableObject {
 
     // MARK: XPC
 
-    private func makeConnection() -> NSXPCConnection {
+    private func makeConnection() throws -> NSXPCConnection {
         if let existing = connection { return existing }
         let conn = NSXPCConnection(machServiceName: HelperConstants.machServiceName,
                                    options: .privileged)
@@ -65,8 +77,9 @@ final class HelperClient: ObservableObject {
         // Pin the helper's designated requirement so the app only ever talks to
         // our signed helper (PLAN.md §6.4, mutual authentication).
         if #available(macOS 13.0, *) {
-            try? conn.setCodeSigningRequirement(
-                HelperRequirements.helperRequirement(teamID: currentTeamID()))
+            let teamID = try currentTeamID()
+            try conn.setCodeSigningRequirement(
+                HelperRequirements.helperRequirement(teamID: teamID))
         }
         conn.invalidationHandler = { [weak self] in
             Task { @MainActor in self?.connection = nil }
@@ -88,8 +101,15 @@ final class HelperClient: ObservableObject {
             return ActionOutcome(status: .aborted,
                 message: "The helper needs approval in System Settings ▸ Login Items.")
         }
+        let conn: NSXPCConnection
+        do {
+            conn = try makeConnection()
+        } catch {
+            return ActionOutcome(status: .aborted,
+                message: "Could not authenticate helper: \(error.localizedDescription)")
+        }
         return await withCheckedContinuation { continuation in
-            let proxy = makeConnection().remoteObjectProxyWithErrorHandler { error in
+            let proxy = conn.remoteObjectProxyWithErrorHandler { error in
                 continuation.resume(returning: ActionOutcome(
                     status: .indeterminate,
                     message: "Helper connection error: \(error.localizedDescription)"))
@@ -107,14 +127,14 @@ final class HelperClient: ObservableObject {
         }
     }
 
-    private func currentTeamID() -> String {
+    private func currentTeamID() throws -> String {
         // The app's own Team ID is used to build the helper requirement; both
         // are signed with the same identity.
         var code: SecCode?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
-              let info = try? copySigningInfo(code),
+              let info = try copySigningInfo(code),
               let team = info[kSecCodeInfoTeamIdentifier as String] as? String
-        else { return HelperConstants.teamIdentifier }
+        else { throw ConnectionError.signingIdentityUnavailable }
         return team
     }
 

@@ -69,12 +69,9 @@ public enum SafetyPolicy {
     /// Mechanisms for which BootCaptain ships a tested, behaviourally reversible
     /// action. Everything else is guided/read-only until its matrix passes.
     public static func isMechanismQualified(_ mechanism: Mechanism) -> Bool {
-        switch mechanism {
-        case .launchDaemon, .launchAgent, .cron:
-            return true
-        default:
-            return false
-        }
+        // No mechanism has completed PLAN.md's Phase-0 hardware, interruption,
+        // authorization, journal, and recovery qualification yet.
+        false
     }
 
     private static func requiresOverride(_ mechanism: Mechanism) -> Bool {

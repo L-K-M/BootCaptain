@@ -83,11 +83,11 @@ final class SafetyPolicyTests: XCTestCase {
         XCTAssertEqual(d.actionClass, .guidedAction)
     }
 
-    func testQualifiedThirdPartyLaunchdIsReversible() {
+    func testUnqualifiedThirdPartyLaunchdIsGuided() {
         let d = SafetyPolicy.decide(mechanism: .launchAgent, trust: .developerIDNotarized,
             recipe: LaunchRecipe(executablePath: "/x"), overrideState: .absentDefault,
             label: "com.dropbox.agent", isInert: false)
-        XCTAssertEqual(d.actionClass, .reversibleMutation)
+        XCTAssertEqual(d.actionClass, .guidedAction)
     }
 
     func testSMAppServiceItemIsGuided() {

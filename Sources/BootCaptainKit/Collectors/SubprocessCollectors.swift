@@ -28,7 +28,7 @@ public struct LoginItemsCollector: Collector {
                 label: name, displayName: name, sourcePath: path,
                 triggers: [.speculative],
                 state: StateAxes(configured: .yes, registered: .yes, authorized: .yes),
-                actionClass: .reversibleMutation,
+                actionClass: .guidedAction,
                 provenance: [Provenance(collector: self.name, source: "System Events",
                                         sourceQuality: .reproducible, osBuild: ctx.osBuild)])
         }

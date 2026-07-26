@@ -29,12 +29,13 @@ final class ScanViewModel: ObservableObject {
         isScanning = true
         Task.detached(priority: .userInitiated) {
             let ctx = SystemEnvironment.makeContext()
-            var result = Scanner().scan(ctx, now: Date().timeIntervalSince1970)
-            if diagnose {
-                let diagnosed = DiagnosisEngine().diagnose(items: result.items, ctx: ctx)
-                result = ScanResult(items: diagnosed, coverage: result.coverage,
-                                    generatedAt: result.generatedAt)
-            }
+            let raw = BootCaptainKit.Scanner().scan(ctx, now: Date().timeIntervalSince1970)
+            // Bind an immutable result so the MainActor closure captures a Sendable
+            // value, not a mutable variable (Swift 6 concurrency safety).
+            let result = diagnose
+                ? ScanResult(items: DiagnosisEngine().diagnose(items: raw.items, ctx: ctx),
+                             coverage: raw.coverage, generatedAt: raw.generatedAt)
+                : raw
             await MainActor.run {
                 self.items = result.items
                 self.coverage = result.coverage
@@ -53,7 +54,8 @@ final class ScanViewModel: ObservableObject {
 
     var groupedByTier: [(Mechanism.Tier, [StartupItem])] {
         let groups = Dictionary(grouping: filteredItems, by: { $0.mechanism.tier })
-        return [.core, .legacy, .advanced].compactMap { tier in
+        let order: [Mechanism.Tier] = [.core, .legacy, .advanced]
+        return order.compactMap { tier in
             guard let items = groups[tier], !items.isEmpty else { return nil }
             return (tier, items.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending })
         }

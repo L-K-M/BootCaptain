@@ -9,9 +9,9 @@
     <key>CFBundleIdentifier</key>
     <string>ch.lkmc.bootcaptain</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -20,7 +20,7 @@
     <string>BootCaptain — released under the Unlicense.</string>
     <!-- Automation is used only for the classic "Open at Login" list. -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>BootCaptain reads and edits your "Open at Login" items through System Events.</string>
+    <string>BootCaptain reads your "Open at Login" items through System Events.</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.utilities</string>
 </dict>

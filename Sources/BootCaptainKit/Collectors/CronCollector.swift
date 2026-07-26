@@ -63,7 +63,7 @@ public struct CronCollector: Collector {
             triggers: entry.runsAtReboot ? [.speculative] : [.scheduled],
             state: state,
             trust: .unknown,
-            actionClass: .reversibleMutation,
+            actionClass: .guidedAction,
             provenance: [Provenance(
                 collector: name, parserVersion: CronParser.version, source: tab,
                 sourceQuality: .appleContract, osBuild: ctx.osBuild,

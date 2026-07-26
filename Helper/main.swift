@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import BootCaptainCore
 import BootCaptainKit
 
@@ -12,6 +13,10 @@ import BootCaptainKit
 
 final class HelperService: NSObject, BootCaptainHelperProtocol, @unchecked Sendable {
     let runner = ActionRunner()
+    // Mutation stays unavailable until the durable journal, authorization
+    // right, descriptor-safe target validation, and Phase-0 hardware matrix in
+    // PLAN.md are implemented and independently reviewed.
+    let mutationsEnabled = false
     // The helper trusts the OS for user enumeration rather than the caller.
     let userHomes: [String] = {
         (try? FileManager.default.contentsOfDirectory(atPath: "/Users"))?
@@ -21,10 +26,15 @@ final class HelperService: NSObject, BootCaptainHelperProtocol, @unchecked Senda
     }()
 
     func helperVersion(withReply reply: @escaping (String) -> Void) {
-        reply(BootCaptainKitInfo.version)
+        reply(BootCaptainCoreInfo.version)
     }
 
     func perform(requestJSON: Data, withReply reply: @escaping (Data) -> Void) {
+        guard mutationsEnabled else {
+            return reply(HelperCodec.encode(ActionOutcome(
+                status: .aborted,
+                message: "Privileged mutations are disabled in this prototype.")))
+        }
         guard let request = HelperCodec.decode(ActionRequest.self, from: requestJSON) else {
             return reply(HelperCodec.encode(ActionOutcome(
                 status: .aborted, message: "Malformed request.")))
@@ -97,7 +107,11 @@ final class ServiceDelegate: NSObject, NSXPCListenerDelegate {
         // Pin the app's designated requirement on the incoming connection so a
         // rogue client cannot drive the helper (PLAN.md §6.4). Team ID is baked
         // in at signing time; here we read it from our own signing info.
-        let requirement = HelperRequirements.appRequirement(teamID: HelperTeam.current())
+        guard let teamID = HelperTeam.current() else {
+            NSLog("BootCaptain helper: rejecting connection, signing Team ID unavailable")
+            return false
+        }
+        let requirement = HelperRequirements.appRequirement(teamID: teamID)
         if #available(macOS 13.0, *) {
             do {
                 try connection.setCodeSigningRequirement(requirement)
@@ -116,30 +130,28 @@ final class ServiceDelegate: NSObject, NSXPCListenerDelegate {
 /// Reads this helper's own Team ID from its signing info so the pinned
 /// requirement matches the actual signing identity at runtime.
 enum HelperTeam {
-    static func current() -> String {
+    static func current() -> String? {
         var code: SecCode?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code else {
-            return HelperConstants.teamIdentifier
+            return nil
         }
         var staticCode: SecStaticCode?
         guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess,
-              let staticCode else { return HelperConstants.teamIdentifier }
+              let staticCode else { return nil }
         var info: CFDictionary?
         guard SecCodeCopySigningInformation(staticCode,
                 SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
               let dict = info as? [String: Any],
               let team = dict[kSecCodeInfoTeamIdentifier as String] as? String
-        else { return HelperConstants.teamIdentifier }
+        else { return nil }
         return team
     }
 }
 
 // Entry point.
-import Security
-
 let delegate = ServiceDelegate()
 let listener = NSXPCListener(machServiceName: HelperConstants.machServiceName)
 listener.delegate = delegate
 listener.resume()
-NSLog("BootCaptain helper \(BootCaptainKitInfo.version) listening on \(HelperConstants.machServiceName)")
+NSLog("BootCaptain helper \(BootCaptainCoreInfo.version) listening on \(HelperConstants.machServiceName)")
 RunLoop.current.run()

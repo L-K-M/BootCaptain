@@ -6,8 +6,6 @@ public enum HelperConstants {
     public static let machServiceName = "ch.lkmc.bootcaptain.helper"
     public static let helperIdentifier = "ch.lkmc.bootcaptain.helper"
     public static let appIdentifier = "ch.lkmc.bootcaptain"
-    /// Team ID placeholder — set at signing time. The XPC requirement pins it.
-    public static let teamIdentifier = "REPLACE_WITH_TEAM_ID"
 }
 
 #if os(macOS)
@@ -44,11 +42,11 @@ public enum HelperCodec {
 /// helper requires the app; the app requires the helper. Both check bundle ID +
 /// Team ID (Team ID alone is too broad — PLAN.md §6.4).
 public enum HelperRequirements {
-    public static func appRequirement(teamID: String = HelperConstants.teamIdentifier) -> String {
+    public static func appRequirement(teamID: String) -> String {
         "identifier \"\(HelperConstants.appIdentifier)\" and anchor apple generic "
         + "and certificate leaf[subject.OU] = \"\(teamID)\""
     }
-    public static func helperRequirement(teamID: String = HelperConstants.teamIdentifier) -> String {
+    public static func helperRequirement(teamID: String) -> String {
         "identifier \"\(HelperConstants.helperIdentifier)\" and anchor apple generic "
         + "and certificate leaf[subject.OU] = \"\(teamID)\""
     }

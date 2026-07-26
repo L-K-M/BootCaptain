@@ -1,11 +1,13 @@
 # BootCaptain
 
-*A consumer-friendly, honest macOS startup manager.* BootCaptain shows
+*A consumer-friendly, honest macOS startup auditor.* BootCaptain shows
 everything that can run at boot or login, tells you which app each item belongs
 to, explains **why** it runs, distinguishes observation from authorization from
-current state, disables what's safe to disable **reversibly**, and shows the
+current state, and shows the
 concrete evidence behind a failed startup item — the vague *"Could not open
 file"* dialog with no name attached.
+
+Current source version: **<!-- version -->0.1.0<!-- /version -->** (research prototype).
 
 <p align="center">
   <img src="App/Assets.xcassets/AppIcon.appiconset/icon_128x128@2x.png" width="128" alt="BootCaptain icon">
@@ -38,10 +40,10 @@ unstable output (`launchctl print`), the code says so and fails soft.
   (*active now*, *execution observed*, *failure evidence*, *configured, not
   observed*, *coverage incomplete*, …). Absence of telemetry never becomes
   "never attempted".
-- **Safe, reversible actions** — the qualified mechanisms disable through the
-  launchd override database (or a reversible cron-comment toggle), always with a
-  precomputed undo. Everything else is a guided route to the owning app or
-  System Settings. Nothing is deleted.
+- **Fail-closed action guidance** — mutation is disabled in this prototype until
+  the durable journal, helper authorization boundary, descriptor-safe target
+  handling, and Phase-0 hardware matrix in `PLAN.md` are complete. The app
+  currently routes users to the owning app or System Settings instead.
 
 ## Layout
 
@@ -71,9 +73,9 @@ which is exactly the honest behavior the app ships.
 
 ```sh
 swift build
-swift test            # 90 tests
+swift test
 swift run bootcaptain coverage
-sudo swift run bootcaptain audit    # full coverage needs root + Full Disk Access
+swift run bootcaptain audit
 ```
 
 On non-macOS the CLI runs the whole engine and returns an empty, fully-gap-
@@ -85,32 +87,33 @@ Requires [XcodeGen](https://github.com/yonaskolb/XcodeGen):
 
 ```sh
 brew install xcodegen
-python3 scripts/make-icons.py     # regenerate the AppIcon set from media-sources/icon.png
-xcodegen generate
-open BootCaptain.xcodeproj         # set DEVELOPMENT_TEAM, then build & run
+python3 -m pip install -r requirements-icons.txt
+scripts/generate-project.sh
+scripts/verify.sh
+scripts/build.sh
 ```
 
-The app is Developer ID, hardened-runtime, **non-sandboxed** (the full feature
-set is incompatible with the App Sandbox — see PLAN.md §6.4). The privileged
-helper is registered on demand via `SMAppService.daemon`, pins the app's
-designated code-signing requirement on every XPC connection, and is removable
-with one click.
+The app is designed for Developer ID distribution with the hardened runtime and
+is **non-sandboxed** (the full feature set is incompatible with the App Sandbox
+— see PLAN.md §6.4). The helper code is embedded for continued development, but
+the app does not register it during read-only use and privileged mutations are
+disabled in this prototype.
 
-> **Status.** The portable engine (Core + Kit + CLI) compiles and passes its
-> full test suite on the Linux Swift toolchain used in CI. The Xcode app/helper
-> targets are authored against the documented macOS APIs but have **not** been
-> built on a Mac in this environment — building them, wiring the real Team ID,
-> and running the Phase-0 hardware matrix in PLAN.md §12 is the next step.
+> **Status.** BootCaptain is a research prototype, not a supported release. CI
+> tests the portable package and requires the unsigned app/helper bundle to
+> compile on macOS. Privileged mutation and helper registration remain gated on
+> the security and hardware work in `PLAN.md` §12.
 
 ## Safety model in one paragraph
 
-BootCaptain fails closed. It never mutates Apple/system or organization-managed
-items, or anything whose provenance is unknown, conflicting, or whose launch
-recipe couldn't be resolved — independent of SIP. Mutations are typed (never
-shell fragments), routed through a privileged helper that re-validates every
-target immediately before acting, journaled with a precomputed inverse, and
-reversible. When it cannot prove an action's effect it reports *indeterminate*
-rather than guessing.
+BootCaptain fails closed. It never treats unknown evidence as false, never uses
+private parser output to authorize an action, and currently exposes no mutation
+as qualified. The planned action path uses typed requests, independent helper
+validation, durable journaling, verified postconditions, and precomputed
+inverses; those are release requirements, not claims about the current build.
+
+Build/release automation is documented in [`CICD.md`](CICD.md), security reports
+in [`SECURITY.md`](SECURITY.md), and data handling in [`PRIVACY.md`](PRIVACY.md).
 
 ## License
 

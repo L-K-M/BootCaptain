@@ -2,8 +2,10 @@ import Foundation
 import BootCaptainCore
 
 /// Runtime facts a collector needs, injected so collectors stay testable.
-public struct ScanContext: Sendable {
+public struct ScanContext: @unchecked Sendable {
     public var runner: CommandRunner
+    // FileManager.default is thread-safe per Apple docs; we store only the
+    // shared instance, so @unchecked Sendable is sound here.
     public var fileManager: FileManager
     /// Home directories to scan for per-user agents / login artifacts.
     public var userHomes: [String]

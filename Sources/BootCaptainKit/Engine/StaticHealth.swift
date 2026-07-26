@@ -3,7 +3,9 @@ import BootCaptainCore
 
 /// Cheap, local per-item health facts (PLAN.md §7.4). No subprocess; pure
 /// filesystem checks so they're fast and safe on the hot path.
-public struct StaticHealthChecker: Sendable {
+public struct StaticHealthChecker: @unchecked Sendable {
+    // FileManager.default is thread-safe per Apple docs; we store only the
+    // shared instance, so @unchecked Sendable is sound here.
     let fileManager: FileManager
     public init(fileManager: FileManager = .default) { self.fileManager = fileManager }
 

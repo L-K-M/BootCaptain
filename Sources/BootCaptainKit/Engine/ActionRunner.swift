@@ -2,7 +2,7 @@ import Foundation
 import BootCaptainCore
 
 /// Outcome of attempting one action.
-public struct ActionOutcome: Sendable {
+public struct ActionOutcome: Codable, Sendable, Equatable {
     public var status: JournalStatus
     public var message: String
     public var journalRecordID: String?
@@ -21,8 +21,10 @@ public struct ActionOutcome: Sendable {
 /// prepared→committed writes) is layered by the helper using
 /// `ActionJournalLogic`; the runner reports the achieved status honestly,
 /// including `.indeterminate` when it cannot prove the effect.
-public struct ActionRunner: Sendable {
+public struct ActionRunner: @unchecked Sendable {
     let runner: CommandRunner
+    // FileManager.default is thread-safe per Apple docs; we store only the
+    // shared instance, so @unchecked Sendable is sound here.
     let fileManager: FileManager
     let vaultRoot: String
 

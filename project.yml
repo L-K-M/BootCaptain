@@ -8,6 +8,7 @@
 # Linux test suite.
 name: BootCaptain
 options:
+  xcodeVersion: "16.3"
   bundleIdPrefix: ch.lkmc
   deploymentTarget:
     macOS: "13.0"
@@ -24,7 +25,7 @@ settings:
     SWIFT_VERSION: "5.9"
     CODE_SIGN_STYLE: Automatic
     ENABLE_HARDENED_RUNTIME: YES
-    # Set your Team ID here; it is also pinned by the XPC requirement at runtime.
+    # Supplied by local signed builds and release CI. Never commit a personal team.
     DEVELOPMENT_TEAM: ""
 
 targets:

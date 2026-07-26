@@ -1,0 +1,28 @@
+# Normalize source and configuration files across platforms.
+* text=auto eol=lf
+
+*.swift text eol=lf diff=swift
+*.md text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.xml text eol=lf
+*.plist text eol=lf
+*.entitlements text eol=lf
+*.editorconfig text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.icns binary
+*.pdf binary
+*.p12 binary
+*.p8 binary
+*.cer binary
+*.mobileprovision binary
+
+# Generated from media-sources/icon.png by scripts/make-icons.py.
+App/Assets.xcassets/AppIcon.appiconset/** linguist-generated=true

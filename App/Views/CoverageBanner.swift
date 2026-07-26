@@ -5,7 +5,6 @@ import BootCaptainCore
 /// collector read as "we covered everything".
 struct CoverageBanner: View {
     @EnvironmentObject var scan: ScanViewModel
-    @EnvironmentObject var helper: HelperClient
     @State private var expanded = false
 
     var body: some View {
@@ -17,10 +16,6 @@ struct CoverageBanner: View {
                     .foregroundStyle(gaps.isEmpty ? .green : .orange)
                 Text(scan.coverage.bannerSummary).font(.callout)
                 Spacer()
-                if helper.status != .enabled {
-                    Button("Enable full coverage") { try? helper.register() }
-                        .buttonStyle(.borderless).font(.caption)
-                }
                 if !gaps.isEmpty {
                     Button(expanded ? "Hide" : "Details") { expanded.toggle() }
                         .buttonStyle(.borderless).font(.caption)

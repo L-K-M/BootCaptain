@@ -70,7 +70,7 @@ final class LoginItemsCollectorTests: XCTestCase {
         let ctx = ScanContext(runner: FakeRunner(["-e": FakeRunner.ok(out)]))
         let result = LoginItemsCollector().collect(ctx)
         XCTAssertEqual(result.items.count, 2)
-        XCTAssertEqual(result.items[0].actionClass, .reversibleMutation)
+        XCTAssertEqual(result.items[0].actionClass, .guidedAction)
     }
 
     func testDeniedAutomation() {

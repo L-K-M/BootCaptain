@@ -19,7 +19,8 @@ func now() -> Double { Date().timeIntervalSince1970 }
 
 func runScan(diagnose: Bool) -> ScanResult {
     let ctx = SystemEnvironment.makeContext()
-    let scanner = Scanner()
+    // Qualify the module: a bare `Scanner` collides with Foundation.Scanner.
+    let scanner = BootCaptainKit.Scanner()
     var result = scanner.scan(ctx, now: now())
     if diagnose {
         let items = DiagnosisEngine().diagnose(items: result.items, ctx: ctx)
