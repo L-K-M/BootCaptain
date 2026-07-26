@@ -17,7 +17,7 @@ func optionValue(_ name: String) -> String? {
 
 func now() -> Double { Date().timeIntervalSince1970 }
 
-func runScan(diagnose: Bool) -> ScanResult {
+func runScan(diagnose: Bool) -> (result: ScanResult, homes: [String]) {
     let ctx = SystemEnvironment.makeContext()
     // Qualify the module: a bare `Scanner` collides with Foundation.Scanner.
     let scanner = BootCaptainKit.Scanner()
@@ -26,7 +26,7 @@ func runScan(diagnose: Bool) -> ScanResult {
         let items = DiagnosisEngine().diagnose(items: result.items, ctx: ctx)
         result = ScanResult(items: items, coverage: result.coverage, generatedAt: result.generatedAt)
     }
-    return result
+    return (result, ctx.userHomes)
 }
 
 // MARK: rendering
@@ -83,9 +83,11 @@ func printTable(_ result: ScanResult, showEvidence: Bool) {
 
 switch command {
 case "scan":
-    let result = runScan(diagnose: false)
+    let scan = runScan(diagnose: false)
+    let result = scan.result
     if flags.contains("--json") {
-        let data = try ScanExport().json(result, redact: !flags.contains("--no-redact"))
+        let data = try ScanExport().json(
+            result, redact: !flags.contains("--no-redact"), homes: scan.homes)
         print(String(data: data, encoding: .utf8) ?? "")
     } else {
         print("BootCaptain — \(result.items.count) startup items")
@@ -93,9 +95,11 @@ case "scan":
     }
 
 case "audit":
-    let result = runScan(diagnose: true)
+    let scan = runScan(diagnose: true)
+    let result = scan.result
     if flags.contains("--json") {
-        let data = try ScanExport().json(result, redact: !flags.contains("--no-redact"))
+        let data = try ScanExport().json(
+            result, redact: !flags.contains("--no-redact"), homes: scan.homes)
         print(String(data: data, encoding: .utf8) ?? "")
     } else {
         print("BootCaptain boot/login evidence audit")
@@ -113,8 +117,9 @@ case "audit":
     }
 
 case "export":
-    let result = runScan(diagnose: flags.contains("--audit"))
-    let data = try ScanExport().json(result, redact: !flags.contains("--no-redact"))
+    let scan = runScan(diagnose: flags.contains("--audit"))
+    let data = try ScanExport().json(
+        scan.result, redact: !flags.contains("--no-redact"), homes: scan.homes)
     if let out = optionValue("--out") {
         try data.write(to: URL(fileURLWithPath: out))
         FileHandle.standardError.write("Wrote \(data.count) bytes to \(out)\n".data(using: .utf8)!)
@@ -123,7 +128,7 @@ case "export":
     }
 
 case "coverage":
-    let result = runScan(diagnose: false)
+    let result = runScan(diagnose: false).result
     print("Coverage report (\(result.coverage.collectors.count) collectors):")
     for c in result.coverage.collectors.sorted(by: { $0.collector < $1.collector }) {
         let mark = c.isGap ? "!" : "+"

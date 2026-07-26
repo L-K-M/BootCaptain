@@ -146,6 +146,43 @@ final class ScanExportTests: XCTestCase {
         XCTAssertFalse(text.contains("/Users/alice"))
         XCTAssertTrue(text.contains("~/Library") || text.contains("/Users/<user>"))
     }
+
+    func testRedactedExportRemovesSensitiveIdentityAndCronCommand() throws {
+        let secret = "token-SUPER-SECRET"
+        let item = StartupItem(
+            id: "cron:/Volumes/Homes/alice/private-tab:7",
+            mechanism: .cron,
+            label: "/Volumes/Homes/alice/bin/job --token \(secret)",
+            displayName: "cron: /Volumes/Homes/alice/bin/job",
+            sourcePath: "/Volumes/Homes/alice/private-tab",
+            notes: ["Command: /Volumes/Homes/alice/bin/job --token \(secret)",
+                    "Runs at every reboot (@reboot)."])
+        let result = ScanResult(items: [item],
+            coverage: CoverageReport(collectors: []), generatedAt: 0)
+        let data = try ScanExport().json(
+            result, redact: true, homes: ["/Volumes/Homes/alice"])
+        let exported = try JSONDecoder().decode(ScanExport.ExportedScan.self, from: data)
+
+        XCTAssertEqual(exported.items[0].id, "item-1")
+        XCTAssertEqual(exported.items[0].displayName, "cron entry")
+        XCTAssertNil(exported.items[0].label)
+        XCTAssertEqual(exported.items[0].sourcePath, "~/private-tab")
+        XCTAssertFalse(exported.items[0].notes.joined().contains(secret))
+        XCTAssertFalse(String(data: data, encoding: .utf8)!.contains("alice"))
+    }
+
+    func testUnredactedExportPreservesLocalIdentity() throws {
+        let item = StartupItem(
+            id: "cron:/Users/alice/tab:1", mechanism: .cron,
+            label: "run-private-job", displayName: "cron: run-private-job")
+        let result = ScanResult(items: [item],
+            coverage: CoverageReport(collectors: []), generatedAt: 0)
+        let data = try ScanExport().json(result, redact: false)
+        let exported = try JSONDecoder().decode(ScanExport.ExportedScan.self, from: data)
+
+        XCTAssertEqual(exported.items[0].id, item.id)
+        XCTAssertEqual(exported.items[0].label, item.label)
+    }
 }
 
 final class AttributionEngineHelperTests: XCTestCase {
