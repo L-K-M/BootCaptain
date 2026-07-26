@@ -11,8 +11,8 @@ final class DisplayPolishTests: XCTestCase {
             "application.app.zen-browser.zen.388608337.1091134354.4495DDE5-8CB0-41B9-A102-06A4142758D5"))
     }
 
-    func testUUIDSuffixedLabelsAreTransient() {
-        XCTAssertTrue(DisplayPolish.isTransientLaunchdLabel(
+    func testUUIDSuffixedLabelsAreNotAssumedTransient() {
+        XCTAssertFalse(DisplayPolish.isTransientLaunchdLabel(
             "com.foo.session.4495DDE5-8CB0-41B9-A102-06A4142758D5"))
     }
 

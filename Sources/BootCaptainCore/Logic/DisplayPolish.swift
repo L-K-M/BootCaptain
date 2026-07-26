@@ -9,13 +9,8 @@ public enum DisplayPolish {
     /// clutter — PLAN.md §3's "several legitimate explanations" for live-only
     /// records). They vanish at logout and carry no persistence.
     public static func isTransientLaunchdLabel(_ label: String) -> Bool {
-        if label.hasPrefix("application.") { return true }
-        // UUID-suffixed per-session instances (e.g. window-restore relaunches).
-        if label.range(of: #"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"#,
-                       options: .regularExpression) != nil {
-            return true
-        }
-        return false
+        // A UUID is legal in persistent labels and is not evidence of transience.
+        label.hasPrefix("application.")
     }
 
     /// A friendlier fallback title for a raw reverse-DNS label when attribution
