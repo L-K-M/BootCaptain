@@ -37,6 +37,15 @@ targets:
         excludes:
           - "Info.plist"
           - "BootCaptain.entitlements"
+      # Ship the helper's launchd plist into the wrapper where SMAppService
+      # discovers it. XcodeGen has no top-level "copyFiles"; a source entry
+      # carrying a copyFiles buildPhase is the declarative way to place a file
+      # at a custom subpath inside the bundle.
+      - path: Helper/ch.lkmc.bootcaptain.helper.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchDaemons
     settings:
       base:
         INFOPLIST_FILE: App/Info.plist
@@ -53,13 +62,6 @@ targets:
       - target: BootCaptainHelper
         copy:
           destination: executables
-    # Ship the helper's launchd plist inside the app where SMAppService looks.
-    postbuildScripts: []
-    copyFiles:
-      - destination: wrapper
-        subpath: Contents/Library/LaunchDaemons
-        files:
-          - Helper/ch.lkmc.bootcaptain.helper.plist
 
   BootCaptainHelper:
     type: tool
