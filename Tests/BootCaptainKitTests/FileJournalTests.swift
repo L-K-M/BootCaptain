@@ -5,6 +5,7 @@ import BootCaptainCore
 final class FileJournalTests: XCTestCase {
     private func tempDir() -> String {
         let dir = NSTemporaryDirectory() + "bootcaptain-journal-test-" + UUID().uuidString
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: dir) }
         return dir
     }
 

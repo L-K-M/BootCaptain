@@ -86,9 +86,13 @@ final class CleanupService: ObservableObject {
             completedItemIDs.remove(action.candidate.itemID)
         }
         if let idx = performed.firstIndex(where: { $0.id == action.id }) {
+            // Preserve the inverse when the undo did not commit, so the Undo
+            // button stays live and the user can retry. Clearing it only on a
+            // committed undo is what flips the row to "Undone".
             performed[idx] = PerformedAction(
                 candidate: action.candidate, outcome: outcome,
-                inverse: nil, undone: outcome.status == .committed)
+                inverse: outcome.status == .committed ? nil : action.inverse,
+                undone: outcome.status == .committed)
         }
     }
 
