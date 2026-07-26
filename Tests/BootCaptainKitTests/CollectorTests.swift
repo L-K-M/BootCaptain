@@ -128,7 +128,9 @@ final class BTMCollectorTests: XCTestCase {
         let ctx = ScanContext(runner: FakeRunner(["dumpbtm": FakeRunner.ok(dump)]), hasRoot: true)
         let result = BTMCollector().collect(ctx)
         XCTAssertEqual(result.items.count, 1)
-        XCTAssertEqual(result.items[0].state.override, .absentDefault)  // willRun == true
+        XCTAssertEqual(result.items[0].state.authorized, .unknown)
+        XCTAssertEqual(result.items[0].state.override, .unknown)
+        XCTAssertTrue(result.items[0].notes.contains { $0.contains("not used to derive effective state") })
     }
 }
 

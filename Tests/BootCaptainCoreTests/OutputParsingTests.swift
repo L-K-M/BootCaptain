@@ -96,23 +96,24 @@ final class BTMDumpParsingTests: XCTestCase {
         let docker = records[0]
         XCTAssertTrue(docker.isDaemon)
         XCTAssertEqual(docker.teamIdentifier, "9BNSXJN65R")
-        XCTAssertEqual(docker.willRun, true)   // enabled AND allowed
+        XCTAssertTrue(docker.dispEnabled)
+        XCTAssertTrue(docker.dispAllowed)
         XCTAssertEqual(docker.mechanism, .smAppServiceDaemon)
         XCTAssertEqual(docker.associatedBundleIDs, ["com.docker.docker"])
     }
 
-    func testEnabledButNotAllowedDoesNotRun() {
-        // Disposition 0x1 = enabled only, NOT allowed → willRun false.
+    func testDispositionBitsRemainSeparateObservations() {
+        // Disposition 0x1 contains an enabled hint but no allowed hint. The
+        // parser deliberately does not turn these private bits into will-run.
         let records = BTMDumpParser.parse(sample)
         let legacy = records[1]
         XCTAssertTrue(legacy.dispEnabled)
         XCTAssertFalse(legacy.dispAllowed)
-        XCTAssertEqual(legacy.willRun, false)
     }
 
-    func testMissingDispositionIsNil() {
+    func testMissingDispositionRemainsUnknown() {
         let records = BTMDumpParser.parse("#1\n    UUID: X\n    Name: y\n")
-        XCTAssertNil(records[0].willRun)
+        XCTAssertNil(records[0].dispositionRaw)
     }
 }
 
