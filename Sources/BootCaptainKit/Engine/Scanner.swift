@@ -90,6 +90,9 @@ public struct Scanner: Sendable {
         let knownLabels = Set(byID.values.compactMap(\.label))
         for (label, svc) in state.services where !knownLabels.contains(label) {
             if label.hasPrefix("com.apple.") { continue }  // system noise
+            // Transient Launch Services registrations (application.<id>.<asn>)
+            // are per-session app instances, not startup items — skip them.
+            if DisplayPolish.isTransientLaunchdLabel(label) { continue }
             var item = StartupItem(
                 id: "launchd-live:\(label)",
                 mechanism: .launchDaemon,
@@ -194,6 +197,10 @@ public struct Scanner: Sendable {
         }
         if !item.attribution.displayTitle.isEmpty, item.attribution.displayTitle != "Unknown item" {
             item.displayName = item.attribution.displayTitle
+        } else if let label = item.label, item.displayName == label {
+            // Nothing resolved: at least prettify the raw reverse-DNS label
+            // (display only — the raw label stays in Details).
+            item.displayName = DisplayPolish.prettifyLabel(label)
         }
     }
 

@@ -5,8 +5,14 @@ struct ItemDetailView: View {
     let item: StartupItem
     @EnvironmentObject var helper: HelperClient
     @EnvironmentObject var scan: ScanViewModel
+    @EnvironmentObject var cleanup: CleanupService
     @State private var actionMessage: String?
     @State private var working = false
+
+    /// The cleanup plan for just this item, when it's broken enough to qualify.
+    private var cleanupCandidate: CleanupPlanner.Candidate? {
+        cleanup.candidates(from: [item]).first
+    }
 
     var body: some View {
         ScrollView {
@@ -27,9 +33,8 @@ struct ItemDetailView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: item.mechanism.tier == .core ? "bolt.badge.clock.fill" : "gearshape.2.fill")
-                .font(.system(size: 34)).foregroundStyle(.tint).frame(width: 44)
+        HStack(alignment: .center, spacing: 14) {
+            ItemIcon(item: item, size: 52)
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.displayName).font(.title2.bold())
                 Text(item.mechanism.displayName).foregroundStyle(.secondary)
@@ -88,6 +93,37 @@ struct ItemDetailView: View {
 
     private var actions: some View {
         Section2("Actions") {
+            // Built-in cleanup for provably-broken items the user can fix
+            // without root: reversible vault move / login-item removal.
+            if let candidate = cleanupCandidate {
+                switch candidate.eligibility {
+                case .userVaultMove, .loginItemRemoval:
+                    HStack {
+                        Button {
+                            Task {
+                                await cleanup.perform([candidate])
+                                actionMessage = cleanup.performed.last?.outcome.message
+                                scan.scan(diagnose: false)
+                            }
+                        } label: {
+                            Label(candidate.eligibility == .userVaultMove
+                                  ? "Move to Vault (reversible)"
+                                  : "Remove Login Item (undoable)",
+                                  systemImage: "bandage.fill")
+                        }
+                        .buttonStyle(.borderedProminent).tint(.orange)
+                        .disabled(cleanup.isWorking)
+                        if cleanup.isWorking { ProgressView().controlSize(.small) }
+                    }
+                    Text(candidate.reason)
+                        .font(.caption).foregroundStyle(.secondary)
+                case .requiresHelper:
+                    Label("Broken, but in a system location — privileged cleanup is disabled in this prototype.",
+                          systemImage: "lock.fill")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                Divider().padding(.vertical, 2)
+            }
             switch item.actionClass {
             case .reversibleMutation:
                 HStack {

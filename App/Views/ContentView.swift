@@ -4,6 +4,12 @@ import BootCaptainCore
 struct ContentView: View {
     @EnvironmentObject var scan: ScanViewModel
     @EnvironmentObject var helper: HelperClient
+    @EnvironmentObject var cleanup: CleanupService
+    @State private var showCleanup = false
+
+    private var cleanupCandidates: [CleanupPlanner.Candidate] {
+        cleanup.candidates(from: scan.items)
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -14,11 +20,15 @@ struct ContentView: View {
             } else if let item = scan.item(id: scan.selection) {
                 ItemDetailView(item: item)
             } else {
-                EmptyDetail()
+                EmptyDetail(cleanupCount: cleanupCandidates.count,
+                            showCleanup: $showCleanup)
             }
         }
-        .toolbar { Toolbar() }
+        .toolbar { Toolbar(cleanupCount: cleanupCandidates.count, showCleanup: $showCleanup) }
         .safeAreaInset(edge: .bottom) { CoverageBanner() }
+        .sheet(isPresented: $showCleanup) {
+            CleanupSheet(candidates: cleanupCandidates)
+        }
     }
 }
 
@@ -63,38 +73,128 @@ private struct Sidebar: View {
     }
 }
 
+/// One sidebar row: real app icon, name, vendor · mechanism, and a status dot
+/// only when there is something to say (broken/failing/orphaned/red-flag).
 private struct ItemRow: View {
     let item: StartupItem
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: UIModel.healthSymbol(item.health))
-                .foregroundStyle(UIModel.healthColor(item.health))
-                .font(.system(size: 12))
+        HStack(spacing: 9) {
+            ItemIcon(item: item, size: 24)
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.displayName).lineLimit(1)
-                Text(item.mechanism.displayName)
+                Text(subtitle)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            Spacer()
-            if item.actionClass == .reversibleMutation {
-                Image(systemName: "switch.2").foregroundStyle(.green).font(.caption)
-            }
+            Spacer(minLength: 4)
+            trailingStatus
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var subtitle: String {
+        if let vendor = item.attribution.vendorName,
+           !vendor.isEmpty, vendor != item.displayName {
+            return "\(vendor) · \(item.mechanism.displayName)"
+        }
+        return item.mechanism.displayName
+    }
+
+    @ViewBuilder private var trailingStatus: some View {
+        switch item.health {
+        case .broken, .failing:
+            StatusDot(color: .red)
+        case .possiblyOrphaned:
+            StatusDot(color: .orange)
+        case .ok, .unknown:
             if item.trust == .brokenOrConflicting {
-                Image(systemName: "exclamationmark.shield.fill")
-                    .foregroundStyle(.red).font(.caption)
+                StatusDot(color: .red)
+            } else if item.state.running == .yes {
+                StatusDot(color: .green)
             }
         }
-        .padding(.vertical, 1)
+    }
+}
+
+private struct StatusDot: View {
+    let color: Color
+    var body: some View {
+        Circle().fill(color).frame(width: 7, height: 7)
+            .padding(.trailing, 2)
+    }
+}
+
+/// Shared item icon: the resolved app icon, else a tinted mechanism symbol.
+struct ItemIcon: View {
+    let item: StartupItem
+    var size: CGFloat = 24
+
+    var body: some View {
+        Group {
+            if let image = IconStore.shared.icon(for: item) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: size, height: size)
+            } else {
+                RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                    .fill(fallbackColor.opacity(0.16))
+                    .overlay(
+                        Image(systemName: fallbackSymbol)
+                            .font(.system(size: size * 0.5, weight: .medium))
+                            .foregroundStyle(fallbackColor)
+                    )
+                    .frame(width: size, height: size)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var isApple: Bool {
+        item.trust == .applePlatform || item.trust == .appleDistributed
+    }
+
+    private var fallbackSymbol: String {
+        if isApple { return "apple.logo" }
+        switch item.mechanism {
+        case .launchDaemon, .smAppServiceDaemon: return "gearshape.2"
+        case .launchAgent, .smAppServiceAgent: return "person.crop.circle.badge.clock"
+        case .classicLoginItem, .smAppServiceLoginItem: return "arrow.right.circle"
+        case .windowRestoration: return "macwindow.on.rectangle"
+        case .cron, .at, .periodic: return "clock.arrow.circlepath"
+        case .kernelExtension, .systemExtension: return "puzzlepiece.extension"
+        case .audioHALPlugin: return "waveform"
+        case .authorizationPlugin: return "key"
+        case .configurationProfile, .managedBackgroundTask: return "building.2"
+        case .shellStartup, .sshStartup: return "terminal"
+        default: return "shippingbox"
+        }
+    }
+
+    private var fallbackColor: Color {
+        if isApple { return .secondary }
+        switch item.health {
+        case .broken, .failing: return .red
+        case .possiblyOrphaned: return .orange
+        default: return .accentColor
+        }
     }
 }
 
 private struct Toolbar: ToolbarContent {
     @EnvironmentObject var scan: ScanViewModel
+    let cleanupCount: Int
+    @Binding var showCleanup: Bool
 
     var body: some ToolbarContent {
         ToolbarItemGroup {
             if scan.isScanning { ProgressView().controlSize(.small) }
+            if cleanupCount > 0 {
+                Button { showCleanup = true } label: {
+                    Label("Clean Up (\(cleanupCount))", systemImage: "bandage")
+                }
+                .help("Review and fix broken startup leftovers")
+            }
             Button { scan.scan(diagnose: false) } label: {
                 Label("Rescan", systemImage: "arrow.clockwise")
             }
@@ -109,17 +209,71 @@ private struct Toolbar: ToolbarContent {
 
 private struct EmptyDetail: View {
     @EnvironmentObject var scan: ScanViewModel
+    let cleanupCount: Int
+    @Binding var showCleanup: Bool
+
+    private var brokenCount: Int {
+        scan.items.filter { $0.health == .broken || $0.health == .failing
+            || $0.health == .possiblyOrphaned }.count
+    }
+    private var runningCount: Int {
+        scan.items.filter { $0.state.running == .yes }.count
+    }
+    private var loginCount: Int {
+        scan.items.filter { $0.triggers.runsAtStartup }.count
+    }
+
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "sailboat.fill").font(.system(size: 44)).foregroundStyle(.tint)
-            Text("BootCaptain").font(.title2.bold())
-            Text("\(scan.items.count) startup items across \(scan.groupedByTier.count) tiers.")
-                .foregroundStyle(.secondary)
-            Text("Select an item to see who it belongs to, why it runs, and whether it's safe to disable.")
+        VStack(spacing: 22) {
+            VStack(spacing: 8) {
+                Image(systemName: "sailboat.fill")
+                    .font(.system(size: 46)).foregroundStyle(.tint)
+                Text("BootCaptain").font(.title.bold())
+                Text("Everything that starts with your Mac, explained.")
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 14) {
+                StatTile(value: scan.items.count, label: "startup items", symbol: "list.bullet")
+                StatTile(value: loginCount, label: "launch at login", symbol: "bolt.fill")
+                StatTile(value: runningCount, label: "running now", symbol: "play.fill")
+                StatTile(value: brokenCount, label: "broken", symbol: "bandage.fill",
+                         tint: brokenCount > 0 ? .orange : .secondary)
+            }
+
+            if cleanupCount > 0 {
+                Button {
+                    showCleanup = true
+                } label: {
+                    Label("Clean Up \(cleanupCount) Broken Item\(cleanupCount == 1 ? "" : "s")…",
+                          systemImage: "bandage.fill")
+                }
+                .controlSize(.large)
+                .buttonStyle(.borderedProminent)
+            }
+
+            Text("Select an item to see who it belongs to, why it runs, and what its startup evidence says.")
                 .font(.callout).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center).frame(maxWidth: 380)
+                .multilineTextAlignment(.center).frame(maxWidth: 400)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct StatTile: View {
+    let value: Int
+    let label: String
+    let symbol: String
+    var tint: Color = .accentColor
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: symbol).font(.system(size: 15)).foregroundStyle(tint)
+            Text("\(value)").font(.title2.bold().monospacedDigit())
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(width: 108, height: 84)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

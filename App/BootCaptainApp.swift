@@ -4,12 +4,14 @@ import SwiftUI
 struct BootCaptainApp: App {
     @StateObject private var scan = ScanViewModel()
     @StateObject private var helper = HelperClient()
+    @StateObject private var cleanup = CleanupService()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(scan)
                 .environmentObject(helper)
+                .environmentObject(cleanup)
                 .frame(minWidth: 900, minHeight: 560)
                 .onAppear {
                     helper.refreshStatus()
