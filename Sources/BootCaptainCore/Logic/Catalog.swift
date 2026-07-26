@@ -17,7 +17,7 @@ public struct CatalogEntry: Codable, Sendable, Equatable {
     /// Optional pointer to the vendor's own off-switch.
     public var vendorOffSwitch: String?
     public var teamIdentifier: String?
-    /// Literal reverse-DNS label prefixes (matched by plain `hasPrefix`).
+    /// Literal reverse-DNS label prefixes, matched at component boundaries.
     public var labelPrefixes: [String]
     public var reviewDate: String
     public var sourceURL: String?
@@ -41,30 +41,37 @@ public struct CatalogEntry: Codable, Sendable, Equatable {
     }
 }
 
-/// Bounded-matching catalog. Lookups use exact Team ID and literal prefix match
-/// only — no regular expressions.
+/// Bounded-matching catalog. Lookups use exact Team ID and literal component
+/// prefixes only — no regular expressions.
 public struct Catalog: Codable, Sendable {
     public var entries: [CatalogEntry]
 
     public init(entries: [CatalogEntry]) { self.entries = entries }
 
-    /// Best match for an item by Team ID (preferred) then label prefix.
+    /// Best product match for an item. A Team ID identifies a developer account,
+    /// not a product, so a component-bounded label match is always required.
+    /// When present, Team ID rejects conflicting catalog candidates.
     public func match(teamID: String?, label: String?) -> CatalogEntry? {
-        if let teamID, !teamID.isEmpty,
-           let hit = entries.first(where: { $0.teamIdentifier == teamID }) {
-            return hit
-        }
-        if let label, !label.isEmpty {
-            // Longest matching prefix wins for specificity.
-            var best: (CatalogEntry, Int)?
-            for entry in entries {
-                for prefix in entry.labelPrefixes where label.hasPrefix(prefix) {
-                    if best == nil || prefix.count > best!.1 { best = (entry, prefix.count) }
+        guard let label, !label.isEmpty else { return nil }
+
+        // Longest matching prefix wins for specificity.
+        var best: (CatalogEntry, Int)?
+        for entry in entries {
+            if let expectedTeam = entry.teamIdentifier,
+               let teamID, !teamID.isEmpty, expectedTeam != teamID {
+                continue
+            }
+            for prefix in entry.labelPrefixes where matches(label: label, prefix: prefix) {
+                if best == nil || prefix.count > best!.1 {
+                    best = (entry, prefix.count)
                 }
             }
-            return best?.0
         }
-        return nil
+        return best?.0
+    }
+
+    private func matches(label: String, prefix: String) -> Bool {
+        label == prefix || label.hasPrefix(prefix + ".")
     }
 
     /// A small seed catalog of common helpers (PLAN.md §5). Stored as data, not
