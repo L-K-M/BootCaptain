@@ -30,6 +30,7 @@ swift run bootcaptain coverage
 scripts/generate-project.sh   # macOS: icons + XcodeGen
 scripts/verify.sh             # macOS CI gate
 scripts/build.sh              # Release app -> dist/BootCaptain.app
+scripts/build.sh --install    # install verified app in /Applications; no helper registration
 scripts/build.sh --check      # resolved local build configuration
 ```
 
