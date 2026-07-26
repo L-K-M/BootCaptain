@@ -31,5 +31,9 @@ let package = Package(
             dependencies: ["BootCaptainCore", "BootCaptainKit"]
         ),
         .testTarget(name: "BootCaptainCoreTests", dependencies: ["BootCaptainCore"]),
+        .testTarget(
+            name: "BootCaptainKitTests",
+            dependencies: ["BootCaptainKit", "BootCaptainCore"]
+        ),
     ]
 )
