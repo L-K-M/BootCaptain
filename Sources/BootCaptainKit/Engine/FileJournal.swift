@@ -53,14 +53,20 @@ public struct FileJournal: Sendable {
 
     /// Convenience: journal a prepared record for a request with its precomputed
     /// inverse, timestamped by the caller (Core forbids Date()).
-    public func prepare(_ request: ActionRequest, at time: Double) -> JournalRecord {
+    ///
+    /// Returns `nil` if the prepared record could not be written durably. Callers
+    /// MUST NOT perform the mutation in that case: a privileged action must never
+    /// run without a persisted prepared record on disk (AGENTS.md: "a mutation is
+    /// always preceded by a `prepared` record ... durable prepared/committed
+    /// journaling").
+    public func prepare(_ request: ActionRequest, at time: Double) -> JournalRecord? {
         let record = JournalRecord(
             id: UUID().uuidString,
             request: request,
             status: .prepared,
             inverse: ActionJournalLogic.inverse(of: request),
             preparedAt: time)
-        write(record)
+        guard write(record) else { return nil }
         return record
     }
 

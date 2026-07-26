@@ -93,7 +93,14 @@ final class CleanupService: ObservableObject {
         let request = ActionRequest(
             operation: .moveToVault, itemID: candidate.itemID,
             sourcePath: candidate.sourcePath)
-        let record = journal.prepare(request, at: Date().timeIntervalSince1970)
+        // No prepared record on disk -> do not move (same invariant the helper
+        // enforces): a mutation must always be preceded by a durable record.
+        guard let record = journal.prepare(request, at: Date().timeIntervalSince1970) else {
+            recordResult(candidate, request: request, outcome: ActionOutcome(
+                status: .aborted,
+                message: "Could not write the prepared journal record; nothing was moved."))
+            return
+        }
         let outcome = await runVaultOperation(request)
         journal.complete(record, status: outcome.status, at: Date().timeIntervalSince1970)
         recordResult(candidate, request: request, outcome: outcome)

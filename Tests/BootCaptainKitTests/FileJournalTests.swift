@@ -8,11 +8,11 @@ final class FileJournalTests: XCTestCase {
         return dir
     }
 
-    func testPrepareThenCompleteRoundTrips() {
+    func testPrepareThenCompleteRoundTrips() throws {
         let journal = FileJournal(directory: tempDir())
         let request = ActionRequest(operation: .moveToVault, itemID: "launchDaemon:com.foo",
                                     sourcePath: "/Library/LaunchDaemons/com.foo.plist")
-        let record = journal.prepare(request, at: 1000)
+        let record = try XCTUnwrap(journal.prepare(request, at: 1000))
         XCTAssertEqual(record.status, .prepared)
         XCTAssertNotNil(record.inverse)
         XCTAssertEqual(record.inverse?.operation, .restoreFromVault)
@@ -24,11 +24,11 @@ final class FileJournalTests: XCTestCase {
         XCTAssertEqual(all.first?.completedAt, 1001)
     }
 
-    func testUnfinishedFindsPreparedAndIndeterminate() {
+    func testUnfinishedFindsPreparedAndIndeterminate() throws {
         let journal = FileJournal(directory: tempDir())
-        let a = journal.prepare(ActionRequest(operation: .moveToVault, itemID: "a"), at: 1)
-        let b = journal.prepare(ActionRequest(operation: .moveToVault, itemID: "b"), at: 2)
-        let c = journal.prepare(ActionRequest(operation: .moveToVault, itemID: "c"), at: 3)
+        let a = try XCTUnwrap(journal.prepare(ActionRequest(operation: .moveToVault, itemID: "a"), at: 1))
+        let b = try XCTUnwrap(journal.prepare(ActionRequest(operation: .moveToVault, itemID: "b"), at: 2))
+        let c = try XCTUnwrap(journal.prepare(ActionRequest(operation: .moveToVault, itemID: "c"), at: 3))
         journal.complete(a, status: .committed, at: 10)   // settled
         journal.complete(b, status: .indeterminate, at: 11) // needs reconcile
         _ = c                                                // left prepared
@@ -42,7 +42,7 @@ final class FileJournalTests: XCTestCase {
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         try? "not json".data(using: .utf8)!.write(to: URL(fileURLWithPath: dir + "/stray.txt"))
         let journal = FileJournal(directory: dir)
-        journal.prepare(ActionRequest(operation: .moveToVault, itemID: "x"), at: 1)
+        _ = journal.prepare(ActionRequest(operation: .moveToVault, itemID: "x"), at: 1)
         XCTAssertEqual(journal.all().count, 1)
     }
 }

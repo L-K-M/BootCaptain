@@ -61,8 +61,14 @@ final class HelperService: NSObject, BootCaptainHelperProtocol, @unchecked Senda
                     status: .aborted, message: "Target failed pre-mutation safety re-check.")))
             }
         }
-        // 3. Durable journal: prepared -> execute -> terminal (AGENTS.md).
-        let record = journal.prepare(request, at: Date().timeIntervalSince1970)
+        // 3. Durable journal: prepared -> execute -> terminal (AGENTS.md). If the
+        //    prepared record cannot be written, refuse to mutate — a privileged
+        //    action must never run without a durable prepared record on disk.
+        guard let record = journal.prepare(request, at: Date().timeIntervalSince1970) else {
+            return reply(HelperCodec.encode(ActionOutcome(
+                status: .aborted,
+                message: "Could not write the prepared journal record; aborting for safety.")))
+        }
         let outcome = runner.perform(request)
         journal.complete(record, status: outcome.status, at: Date().timeIntervalSince1970)
         reply(HelperCodec.encode(outcome))
