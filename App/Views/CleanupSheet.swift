@@ -121,6 +121,7 @@ struct CleanupSheet: View {
                     if action.inverse != nil && !action.undone {
                         Button("Undo") { Task { await cleanup.undo(action, helper: helper) } }
                             .controlSize(.small)
+                            .disabled(cleanup.isWorking)
                     } else if action.undone {
                         Text("Undone").font(.caption).foregroundStyle(.secondary)
                     }

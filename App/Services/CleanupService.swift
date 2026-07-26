@@ -65,7 +65,12 @@ final class CleanupService: ObservableObject {
 
     /// Undo one performed action. Dispatches on what was actually done.
     func undo(_ action: PerformedAction, helper: HelperClient) async {
-        guard !action.undone, let inverse = action.inverse else { return }
+        // `!isWorking` rejects a second concurrent undo (e.g. a rapid double
+        // tap) before `performed` is updated, which would otherwise run the
+        // same inverse twice and corrupt the row's undone/inverse state. The
+        // Undo button is also disabled while working; this is the guard behind
+        // it.
+        guard !isWorking, !action.undone, let inverse = action.inverse else { return }
         isWorking = true
         defer { isWorking = false }
         let outcome: ActionOutcome
