@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+jobs:
+  linux-core:
+    name: Build & test portable core (Linux)
+    runs-on: ubuntu-24.04
+    container: swift:6.0.3-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test
+      - name: CLI smoke test
+        run: swift run bootcaptain coverage
+
+  macos-app:
+    name: Build app + helper (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build (unsigned)
+        run: |
+          xcodebuild build \
+            -project BootCaptain.xcodeproj \
+            -scheme BootCaptain \
+            -destination 'platform=macOS' \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+    continue-on-error: true
