@@ -1,0 +1,82 @@
+# XcodeGen project for BootCaptain.
+#
+# Generate the .xcodeproj on a Mac with:  xcodegen generate
+# then open BootCaptain.xcodeproj and set DEVELOPMENT_TEAM.
+#
+# The portable core (BootCaptainCore) and the macOS layer (BootCaptainKit) come
+# from the local Swift package, so the same code is shared with the CLI and the
+# Linux test suite.
+name: BootCaptain
+options:
+  bundleIdPrefix: ch.lkmc
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+
+packages:
+  BootCaptain:
+    path: .
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_HARDENED_RUNTIME: YES
+    # Set your Team ID here; it is also pinned by the XPC requirement at runtime.
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  BootCaptain:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+        excludes:
+          - "Info.plist"
+          - "BootCaptain.entitlements"
+    settings:
+      base:
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/BootCaptain.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: ch.lkmc.bootcaptain
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_APP_SANDBOX: NO
+    dependencies:
+      - package: BootCaptain
+        product: BootCaptainCore
+      - package: BootCaptain
+        product: BootCaptainKit
+      # Embed the helper executable into Contents/MacOS.
+      - target: BootCaptainHelper
+        copy:
+          destination: executables
+    # Ship the helper's launchd plist inside the app where SMAppService looks.
+    postbuildScripts: []
+    copyFiles:
+      - destination: wrapper
+        subpath: Contents/Library/LaunchDaemons
+        files:
+          - Helper/ch.lkmc.bootcaptain.helper.plist
+
+  BootCaptainHelper:
+    type: tool
+    platform: macOS
+    productName: ch.lkmc.bootcaptain.helper
+    sources:
+      - path: Helper/main.swift
+    settings:
+      base:
+        PRODUCT_NAME: ch.lkmc.bootcaptain.helper
+        PRODUCT_BUNDLE_IDENTIFIER: ch.lkmc.bootcaptain.helper
+        CODE_SIGN_ENTITLEMENTS: Helper/Helper.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        # Embed the Info.plist into the Mach-O so SMAppService can identify it.
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        INFOPLIST_FILE: Helper/Helper-Info.plist
+    dependencies:
+      - package: BootCaptain
+        product: BootCaptainCore
+      - package: BootCaptain
+        product: BootCaptainKit
