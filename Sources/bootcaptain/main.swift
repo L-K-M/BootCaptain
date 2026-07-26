@@ -149,9 +149,10 @@ default:
       --no-redact    Do not redact user paths in exports
       --audit        Include diagnosis in `export`
 
-    Coverage depends on the current user's permissions; unavailable sources are
-    reported as gaps. Do not run under sudo: it changes the user and launchd
-    domains being inspected and does not grant Full Disk Access. On non-macOS
-    this reports an empty scan by design.
+    Coverage depends on the current user's permissions; `coverage` reports known
+    gaps. For privacy-protected sources, grant Full Disk Access to the terminal
+    that launches this CLI. Do not run under sudo: it changes the user and
+    launchd domains being inspected and does not grant Full Disk Access. On
+    non-macOS this reports an empty scan by design.
     """)
 }
