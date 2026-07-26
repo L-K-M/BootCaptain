@@ -88,7 +88,7 @@ Requires [XcodeGen](https://github.com/yonaskolb/XcodeGen):
 brew install xcodegen
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements-icons.txt
+python3 -m pip install -r requirements-icons.txt
 scripts/generate-project.sh
 scripts/verify.sh
 scripts/build.sh

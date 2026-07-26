@@ -14,7 +14,10 @@ command -v xcodegen >/dev/null 2>&1 || {
   exit 1
 }
 python3 -c 'import PIL' >/dev/null 2>&1 || {
-  echo "error: Pillow is required; activate a virtual environment and run: python3 -m pip install -r requirements-icons.txt" >&2
+  echo "error: Pillow is required. Set up an isolated environment:" >&2
+  echo "  python3 -m venv .venv" >&2
+  echo "  source .venv/bin/activate" >&2
+  echo "  python3 -m pip install -r requirements-icons.txt" >&2
   exit 1
 }
 
