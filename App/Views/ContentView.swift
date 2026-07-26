@@ -209,8 +209,8 @@ private struct Toolbar: ToolbarContent {
             .disabled(scan.isScanning)
             .help(scan.isScanning ? "Scanning…" : "Rescan startup items")
             // Keep the button's identity for VoiceOver when the label becomes a
-            // bare ProgressView during a scan.
-            .accessibilityLabel("Rescan")
+            // bare ProgressView during a scan, and convey the in-progress state.
+            .accessibilityLabel(scan.isScanning ? "Scanning" : "Rescan")
             Button { scan.scan(diagnose: true) } label: {
                 Label("Boot Audit", systemImage: "stethoscope")
             }

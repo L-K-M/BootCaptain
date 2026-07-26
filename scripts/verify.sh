@@ -12,7 +12,17 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 scripts/generate-project.sh
-git diff --exit-code -- App/Assets.xcassets/AppIcon.appiconset
+
+# Regenerated PNG bytes are not reproducible across platforms/Pillow builds, so
+# a byte-exact diff of the icons produces false failures. Assert the asset
+# catalog is structurally intact instead: the manifest is unchanged (JSON is
+# reproducible) and every expected icon exists as a non-empty PNG. The build
+# uses the freshly regenerated icons regardless.
+git diff --exit-code -- App/Assets.xcassets/AppIcon.appiconset/Contents.json
+for icon in App/Assets.xcassets/AppIcon.appiconset/icon_*.png; do
+  [[ -s "$icon" ]] || { echo "error: missing or empty icon: $icon" >&2; exit 1; }
+  file "$icon" | grep -q 'PNG image data' || { echo "error: not a PNG: $icon" >&2; exit 1; }
+done
 
 plutil -lint \
   App/Info.plist \
