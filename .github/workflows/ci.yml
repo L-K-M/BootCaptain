@@ -72,7 +72,12 @@ jobs:
       - name: Install tooling
         run: |
           brew install xcodegen
-          python3 -m pip install --disable-pip-version-check -r requirements-icons.txt
+          # Homebrew's python is externally managed (PEP 668), so install
+          # Pillow into a venv and put it first on PATH for later steps —
+          # generate-project.sh calls a bare `python3`.
+          python3 -m venv "$RUNNER_TEMP/icons-venv"
+          "$RUNNER_TEMP/icons-venv/bin/pip" install --disable-pip-version-check -r requirements-icons.txt
+          echo "$RUNNER_TEMP/icons-venv/bin" >> "$GITHUB_PATH"
 
       - name: Verify package, app, helper, and bundle
         run: scripts/verify.sh
