@@ -80,6 +80,19 @@ final class LoginItemsCollectorTests: XCTestCase {
     }
 }
 
+final class LegacyCensusCollectorTests: XCTestCase {
+    func testVersionSensitiveArtifactsDoNotClaimExecutionTrigger() {
+        let probes = LegacyCensusCollector().probes
+        let emond = probes.first { $0.mechanism == .emond }
+        let periodic = probes.first { $0.mechanism == .periodic }
+
+        XCTAssertTrue(emond?.triggers.isEmpty == true)
+        XCTAssertTrue(periodic?.triggers.isEmpty == true)
+        XCTAssertTrue(emond?.note.contains("does not establish") == true)
+        XCTAssertTrue(periodic?.note.contains("does not establish") == true)
+    }
+}
+
 final class LaunchctlStateCollectorTests: XCTestCase {
     func testBuildsServiceAndOverrideMaps() {
         let printOut = """
