@@ -86,8 +86,12 @@ final class LegacyCensusCollectorTests: XCTestCase {
         let emond = probes.first { $0.mechanism == .emond }
         let periodic = probes.first { $0.mechanism == .periodic }
 
-        XCTAssertTrue(emond?.triggers.isEmpty == true)
-        XCTAssertTrue(periodic?.triggers.isEmpty == true)
+        XCTAssertNotNil(emond, "emond probe should exist")
+        XCTAssertNotNil(periodic, "periodic probe should exist")
+        XCTAssertTrue(emond?.triggers.isEmpty ?? false,
+                      "emond file presence should not imply a trigger")
+        XCTAssertTrue(periodic?.triggers.isEmpty ?? false,
+                      "periodic file presence should not imply a trigger")
         XCTAssertTrue(emond?.note.contains("does not establish") == true)
         XCTAssertTrue(periodic?.note.contains("does not establish") == true)
     }
