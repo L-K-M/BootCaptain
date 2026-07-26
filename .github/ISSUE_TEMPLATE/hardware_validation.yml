@@ -1,0 +1,53 @@
+name: Hardware validation result
+description: Record a sanitized result for a PLAN.md/EVIDENCE.md validation item.
+title: "[Validation]: "
+labels: [validation]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Hardware observations do not qualify mutation by themselves. Never run a
+        mutating test unless it is an explicitly reviewed fixture with a recovery plan.
+        Do not upload raw host evidence.
+  - type: input
+    id: evidence
+    attributes:
+      label: Evidence or PLAN reference
+      placeholder: EVIDENCE.md L-06 / PLAN.md section 12
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: macOS version and build
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Test environment
+      description: Architecture, hardware/VM, clean or upgraded install, account/session, management, SIP/FileVault/TCC state.
+    validations:
+      required: true
+  - type: textarea
+    id: fixture
+    attributes:
+      label: Synthetic fixture and procedure
+      description: Describe the sanitized fixture and recovery plan; do not paste real host configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: This report contains no raw logs, databases, crontabs, exports, usernames, paths, commands, tokens, or organization details.
+          required: true
+        - label: I understand this result does not qualify privileged mutation without the complete matrix and human review.
+          required: true

@@ -1,45 +1,86 @@
+# CI proves both products: the portable Swift package/CLI and the generated
+# macOS app bundle containing the privileged helper. The latter is mandatory;
+# a green run must never hide an app/helper compiler failure.
 name: CI
 
 on:
   push:
-    branches: [main, "claude/**"]
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  repository:
+    name: Repository metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Validate JSON and YAML
+        run: |
+          jq empty .claude/settings.json .markdownlint.json App/Assets.xcassets/AppIcon.appiconset/Contents.json
+          npx --yes yaml-lint .github/workflows/*.yml .github/dependabot.yml .github/ISSUE_TEMPLATE/*.yml project.yml
+
+      - name: Lint Markdown
+        run: npx --yes markdownlint-cli --config .markdownlint.json -- '*.md'
+
+      - name: Check whitespace
+        run: git diff --check
+
   linux-core:
-    name: Build & test portable core (Linux)
+    name: Portable package and CLI
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     container: swift:6.0.3-noble
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
       - name: Build
         run: swift build
+
       - name: Test
         run: swift test
+
       - name: CLI smoke test
         run: swift run bootcaptain coverage
 
   macos-app:
-    name: Generate + build app (macOS, best-effort)
+    name: macOS app and helper
     runs-on: macos-15
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - name: Select latest Xcode
+      - uses: actions/checkout@v7
+
+      - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: latest-stable
-      - name: Install XcodeGen
-        run: brew install xcodegen
-      # Project generation is the part this job actually verifies; it must pass.
-      - name: Generate Xcode project
-        run: xcodegen generate
-      # The app/helper build needs a signing team + real macOS APIs; it is a
-      # best-effort smoke build (unsigned) that never gates the PR.
-      - name: Build app + helper (unsigned, best-effort)
-        continue-on-error: true
+          xcode-version: "16.3"
+
+      - name: Install tooling
         run: |
-          xcodebuild build \
-            -project BootCaptain.xcodeproj \
-            -scheme BootCaptain \
-            -destination 'platform=macOS' \
-            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+          brew install xcodegen
+          python3 -m pip install --disable-pip-version-check -r requirements-icons.txt
+
+      - name: Verify package, app, helper, and bundle
+        run: scripts/verify.sh
+
+      - name: Upload the assembled app
+        uses: actions/upload-artifact@v7
+        with:
+          name: BootCaptain-app-${{ github.sha }}
+          path: build/DerivedData/Build/Products/Debug/BootCaptain.app
+          if-no-files-found: error
+          retention-days: 14

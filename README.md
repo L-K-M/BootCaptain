@@ -9,9 +9,7 @@ file"* dialog with no name attached.
 
 Current source version: **<!-- version -->0.1.0<!-- /version -->** (research prototype).
 
-<p align="center">
-  <img src="App/Assets.xcassets/AppIcon.appiconset/icon_128x128@2x.png" width="128" alt="BootCaptain icon">
-</p>
+![BootCaptain icon](App/Assets.xcassets/AppIcon.appiconset/icon_128x128@2x.png)
 
 This repository implements the design in [`PLAN.md`](PLAN.md), backed by the
 evidence register in [`EVIDENCE.md`](EVIDENCE.md). Wherever a behavior relies on
@@ -47,7 +45,7 @@ unstable output (`launchctl print`), the code says so and fails soft.
 
 ## Layout
 
-```
+```text
 Sources/
   BootCaptainCore/   Portable models, parsers, and safety logic. Foundation only;
                      builds and is unit-tested on Linux CI.
