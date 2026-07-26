@@ -52,9 +52,7 @@ final class ScanViewModel: ObservableObject {
 
     /// Items after search + filter, grouped by tier for the sidebar/list.
     var filteredItems: [StartupItem] {
-        items.filter { item in
-            matchesFilter(item) && matchesSearch(item)
-        }
+        items.filter(isDisplayed)
     }
 
     var groupedByTier: [(Mechanism.Tier, [StartupItem])] {
@@ -74,10 +72,14 @@ final class ScanViewModel: ObservableObject {
     private func reconcileSelection() {
         guard let selection else { return }
         if !items.contains(where: {
-            $0.id == selection && matchesFilter($0) && matchesSearch($0)
+            $0.id == selection && isDisplayed($0)
         }) {
             self.selection = nil
         }
+    }
+
+    private func isDisplayed(_ item: StartupItem) -> Bool {
+        matchesFilter(item) && matchesSearch(item)
     }
 
     private func matchesFilter(_ item: StartupItem) -> Bool {
