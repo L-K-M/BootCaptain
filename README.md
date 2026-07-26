@@ -95,8 +95,8 @@ scripts/build.sh
 ```
 
 The app is designed for Developer ID distribution with the hardened runtime and
-is **non-sandboxed** (the full feature set is incompatible with the App Sandbox
-- see `PLAN.md` section 6.4). The helper is embedded but is not registered
+is **non-sandboxed** (the full feature set is incompatible with the App Sandbox;
+see `PLAN.md` section 6.4). The helper is embedded but is not registered
 during read-only use. A research build that exposes helper-backed Clean Up can
 register it on the first such action; that path is not release-qualified.
 
