@@ -53,8 +53,17 @@ final class HelperService: NSObject, BootCaptainHelperProtocol, @unchecked Senda
                 status: .aborted, message: "Rejected by policy: \(rejection).")))
         }
         // 2. Descriptor-level TOCTOU re-validation of the file being moved out.
-        //    (restoreFromVault's request path is the not-yet-existing original
-        //    destination, so it is validated by the runner's exclusive rename.)
+        //    moveToVault re-checks its source with TargetGuard immediately below,
+        //    right before the move. restoreFromVault is deliberately NOT
+        //    symmetric: its request path is the not-yet-existing original
+        //    destination (guarded by the runner's no-overwrite rename), and its
+        //    vault source is not descriptor-re-validated here. That residual gap
+        //    is accepted because the vault lives under root-owned
+        //    /Library/Application Support — only root could plant a symlink in it
+        //    to redirect the restore — and full race-safe descriptor traversal
+        //    for both directions is the documented Phase-0 hardening follow-up
+        //    (see TargetGuard below and AGENTS.md "race-safe descriptor
+        //    traversal"); it is not a per-request check to bolt on reactively.
         if request.operation == .moveToVault, let path = request.sourcePath {
             guard TargetGuard.isSafeToActOn(path: path) else {
                 return reply(HelperCodec.encode(ActionOutcome(

@@ -52,6 +52,12 @@ final class CleanupService: ObservableObject {
     /// Perform the selected candidates. Already-completed items are skipped, so
     /// this is safe to call repeatedly.
     func perform(_ selected: [CleanupPlanner.Candidate], helper: HelperClient) async {
+        // Reject a concurrent invocation for the same reason as undo(): on
+        // @MainActor, tasks interleave at await points, so a second perform
+        // entering while the first is suspended would let its defer clear
+        // isWorking early and re-enable the UI mid-run. The buttons are also
+        // disabled on isWorking; this keeps the two guards symmetric.
+        guard !isWorking else { return }
         isWorking = true
         defer { isWorking = false }
         for candidate in selected where !completedItemIDs.contains(candidate.itemID) {
