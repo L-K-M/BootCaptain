@@ -47,8 +47,8 @@ if [[ "$IDENTITY" != "-" ]]; then
     exit 1
   fi
 
-  APP_REQUIREMENT="$(codesign --display --requirements :- "$APP" 2>&1)"
-  HELPER_REQUIREMENT="$(codesign --display --requirements :- "$HELPER" 2>&1)"
+  APP_REQUIREMENT="$(codesign --display --requirements - "$APP" 2>&1)"
+  HELPER_REQUIREMENT="$(codesign --display --requirements - "$HELPER" 2>&1)"
   [[ "$APP_REQUIREMENT" == *'identifier "ch.lkmc.bootcaptain"'* ]] || {
     echo "error: app designated requirement has an unexpected identifier" >&2
     exit 1
