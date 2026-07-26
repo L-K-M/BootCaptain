@@ -51,7 +51,10 @@ public struct ScanExport: Sendable {
                 vendor: item.attribution.vendorName,
                 product: item.attribution.productName,
                 teamID: item.attribution.teamIdentifier,
-                notes: redact ? redactedNotes(item, homes: homes) : item.notes)
+                // Notes are free-form collector text and can contain commands,
+                // arguments, credentials, or paths. A share-redacted export
+                // cannot safely preserve them without a structured allowlist.
+                notes: redact ? [] : item.notes)
         }
         let scan = ExportedScan(
             generatedAt: result.generatedAt,
@@ -77,14 +80,6 @@ public struct ScanExport: Sendable {
     func redactedLabel(_ item: StartupItem, homes: [String]) -> String? {
         guard item.mechanism != .cron, let label = item.label else { return nil }
         return redactAllPaths(label, homes: homes)
-    }
-
-    func redactedNotes(_ item: StartupItem, homes: [String]) -> [String] {
-        item.notes.compactMap { note in
-            let normalized = note.trimmingCharacters(in: .whitespaces).lowercased()
-            if normalized.hasPrefix("command:") { return nil }
-            return redactAllPaths(note, homes: homes)
-        }
     }
 
     func redactAllPaths(_ text: String, homes: [String]) -> String {

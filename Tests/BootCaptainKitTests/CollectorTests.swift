@@ -167,12 +167,13 @@ final class ScanExportTests: XCTestCase {
         XCTAssertEqual(exported.items[0].displayName, "cron entry")
         XCTAssertNil(exported.items[0].label)
         XCTAssertEqual(exported.items[0].sourcePath, "~/private-tab")
-        XCTAssertFalse(exported.items[0].notes.joined().contains(privateValue))
-        XCTAssertTrue(exported.items[0].notes.contains { $0.contains("@reboot") })
-        XCTAssertFalse(String(data: data, encoding: .utf8)!.contains("alice"))
+        XCTAssertTrue(exported.items[0].notes.isEmpty)
+        let text = String(data: data, encoding: .utf8)!
+        XCTAssertFalse(text.contains("alice"))
+        XCTAssertFalse(text.contains(privateValue))
     }
 
-    func testRedactedExportDropsCommandNotesForEveryMechanism() throws {
+    func testRedactedExportDropsFreeFormNotesForEveryMechanism() throws {
         let item = StartupItem(
             id: "launchAgent:com.example.helper", mechanism: .launchAgent,
             label: "com.example.helper", displayName: "Example Helper",
@@ -183,7 +184,7 @@ final class ScanExportTests: XCTestCase {
         let data = try ScanExport().json(result, redact: true)
         let exported = try JSONDecoder().decode(ScanExport.ExportedScan.self, from: data)
 
-        XCTAssertEqual(exported.items[0].notes, ["Known vendor helper."])
+        XCTAssertTrue(exported.items[0].notes.isEmpty)
     }
 
     func testUnredactedExportPreservesLocalIdentity() throws {
