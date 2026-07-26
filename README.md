@@ -1,54 +1,47 @@
 # BootCaptain
 
-*A consumer-friendly, honest macOS startup auditor.* BootCaptain shows
-everything that can run at boot or login, tells you which app each item belongs
-to, explains **why** it runs, distinguishes observation from authorization from
-current state, and shows the
-concrete evidence behind a failed startup item — the vague *"Could not open
-file"* dialog with no name attached.
+*A research prototype for a consumer-friendly, honest macOS startup auditor.*
+BootCaptain currently inventories a partial set of startup mechanisms, keeps
+several state axes separate, attempts product attribution, and experiments with
+evidence behind failed startup items. The intended product is the concrete
+answer to a vague *"Could not open file"* login dialog; the current prototype
+does not yet provide exhaustive or release-qualified answers.
 
 Current source version: **<!-- version -->0.1.0<!-- /version -->** (research prototype).
 
 ![BootCaptain icon](App/Assets.xcassets/AppIcon.appiconset/icon_128x128@2x.png)
 
-This repository implements the design in [`PLAN.md`](PLAN.md), backed by the
-evidence register in [`EVIDENCE.md`](EVIDENCE.md). Wherever a behavior relies on
-undocumented tooling (`sfltool`), a private store (the BTM database), or
-unstable output (`launchctl print`), the code says so and fails soft.
+[`PLAN.md`](PLAN.md) is the product and architecture contract;
+[`EVIDENCE.md`](EVIDENCE.md) records the claims that still need real Mac
+fixtures. This repository implements early vertical slices of that design.
+Undocumented tooling (`sfltool`), private BTM data, and unstable
+`launchctl print` output remain build-sensitive prototypes, not support claims.
 
 ## What it does
 
-- **Exhaustive, tiered collection** — launchd daemons/agents (including
-  SMAppService plists embedded in app bundles), Background Task Management,
-  classic login items, "reopen windows" relaunch, cron/at/periodic, system
-  extensions, app extensions, configuration profiles, and a legacy/adjacent
-  census — split into **core**, **legacy**, and **advanced** tiers so a shell
-  rc file is never presented as "runs at login".
-- **Reconciled state, never one boolean** — configured / registered /
-  authorized / launchd-override / loaded / running are tracked as separate axes.
-- **Real attribution** — resolves the owning app from bundle containment, code
-  signing Team ID, `AssociatedBundleIdentifiers`, Apple's own
-  `attributions.plist`, package receipts, and a curated catalog — scoring vendor
-  and product separately and surfacing conflicts.
-- **Trust you can act on** — Apple/system and organization-managed items are
-  never mutated; a spoofed `com.apple.*` label is a red flag; unknown or
-  conflicting provenance fails closed.
-- **Confidence-rated diagnosis** — a first-run boot audit correlates the unified
-  log, `launchctl` counters, and crash reports into safe states
-  (*active now*, *execution observed*, *failure evidence*, *configured, not
-  observed*, *coverage incomplete*, …). Absence of telemetry never becomes
-  "never attempted".
-- **Fail-closed action guidance** — the launchd/cron state mutations stay
-  disabled until their Phase-0 hardware matrix in `PLAN.md` is complete; the app
-  routes those to the owning app or System Settings. The built-in **Clean Up**
-  action handles provably-broken leftovers reversibly: orphaned
-  `~/Library/LaunchAgents` plists and dead "Open at Login" entries as the
-  current user, and broken `/Library/Launch{Daemons,Agents}` plists through the
-  admin-approved privileged helper — each moved to a reversible vault (never
-  deleted), journaled, with one-click undo, and never touching Apple/managed
-  items. Only the reversible vault move/restore is enabled
-  (`ActionRequest.Operation.isEnabledInCurrentBuild`); it still needs on-device
-  validation before it is considered qualified.
+- **Partial, tiered inventory** - canonical launchd files, shallow embedded
+  service plists, an `sfltool dumpbtm` adapter, current-user login items, window
+  restoration, cron files, basic extension/profile probes, and a legacy census.
+  Many mechanisms in `PLAN.md` are not implemented, and several sources require
+  permissions the ordinary app process does not have.
+- **Separate state fields** - configured, registered, authorized, launchd
+  override, loaded, and running exist in the model. Runtime reconciliation is
+  provisional: launchd domain/session identity and cross-source joins are not
+  yet production-correct.
+- **Prototype attribution** - bundle containment, signing metadata,
+  `AssociatedBundleIdentifiers`, Apple's attribution table, package receipts,
+  and a small catalog contribute signals. App discovery and conflict handling
+  remain incomplete.
+- **Experimental diagnosis** - the manual **Boot Audit** command reads unified
+  logs and crash reports. Correlation and observation windows still require
+  fixtures, so results are evidence hints rather than definitive causal
+  conclusions. It is not run automatically on first launch.
+- **Prototype Clean Up path** - current-user vault/login-item actions and helper
+  vault move/restore code exist. The helper-backed path has not passed the
+  authorization, descriptor-safety, interruption, recovery, or hardware
+  qualification required by `PLAN.md` and `EVIDENCE.md`; it must remain disabled
+  in release builds. Launchd-state and cron mutations are also disabled. Undo
+  history is session-scoped and login-item restoration is not exact.
 
 ## Layout
 
@@ -63,14 +56,14 @@ Sources/
   bootcaptain/       Dependency-free CLI (scan / audit / export / coverage).
 App/                 SwiftUI app (Xcode-built).
 Helper/              Privileged SMAppService daemon + its launchd plist.
-Tests/               90 XCTest cases, green on the Linux toolchain.
+Tests/               Portable Core and Kit XCTest suites.
 project.yml          XcodeGen project for the app + helper.
 ```
 
-The split is deliberate: the **load-bearing reasoning is portable and verified
-off a Mac**. `swift build && swift test` runs the entire Core + Kit logic on
-Linux; the collectors report every macOS-only source as a coverage gap there,
-which is exactly the honest behavior the app ships.
+The split is deliberate: much of the load-bearing reasoning is portable.
+`swift build && swift test` runs Core and Kit logic on Linux. That validates
+portable behavior, not real macOS schemas, permissions, signing, launchd
+sessions, helper authorization, interruption recovery, or UI behavior.
 
 ## Building
 
@@ -83,8 +76,9 @@ swift run bootcaptain coverage
 swift run bootcaptain audit
 ```
 
-On non-macOS the CLI runs the whole engine and returns an empty, fully-gap-
-flagged scan by design.
+On non-macOS the CLI exercises portable wiring. macOS commands are unavailable;
+coverage reporting is still incomplete and should not be treated as a complete
+capability manifest.
 
 ### The app + helper (macOS)
 
@@ -92,7 +86,9 @@ Requires [XcodeGen](https://github.com/yonaskolb/XcodeGen):
 
 ```sh
 brew install xcodegen
-python3 -m pip install -r requirements-icons.txt
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-icons.txt
 scripts/generate-project.sh
 scripts/verify.sh
 scripts/build.sh
@@ -100,22 +96,23 @@ scripts/build.sh
 
 The app is designed for Developer ID distribution with the hardened runtime and
 is **non-sandboxed** (the full feature set is incompatible with the App Sandbox
-— see PLAN.md §6.4). The helper code is embedded for continued development, but
-the app does not register it during read-only use and privileged mutations are
-disabled in this prototype.
+- see `PLAN.md` section 6.4). The helper is embedded but is not registered
+during read-only use. A research build that exposes helper-backed Clean Up can
+register it on the first such action; that path is not release-qualified.
 
 > **Status.** BootCaptain is a research prototype, not a supported release. CI
 > tests the portable package and requires the unsigned app/helper bundle to
-> compile on macOS. Privileged mutation and helper registration remain gated on
-> the security and hardware work in `PLAN.md` §12.
+> compile on one macOS runner. That does not establish behavior across supported
+> OS, architecture, permission, session, signing, or interruption matrices.
 
 ## Safety model in one paragraph
 
-BootCaptain fails closed. It never treats unknown evidence as false, never uses
-private parser output to authorize an action, and currently exposes no mutation
-as qualified. The planned action path uses typed requests, independent helper
-validation, durable journaling, verified postconditions, and precomputed
-inverses; those are release requirements, not claims about the current build.
+BootCaptain's required safety model is fail-closed: unknown evidence must not
+become false state, private parser output must not authorize action, and no
+mutation is qualified without typed requests, independent helper validation,
+durable recovery, verified postconditions, and hardware evidence. The current
+prototype does not yet satisfy all of those invariants; `PLAN.md` describes the
+required end state rather than certifying the current build.
 
 Build/release automation is documented in [`CICD.md`](CICD.md), security reports
 in [`SECURITY.md`](SECURITY.md), and data handling in [`PRIVACY.md`](PRIVACY.md).
