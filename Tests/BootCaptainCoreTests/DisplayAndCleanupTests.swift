@@ -50,13 +50,16 @@ final class CleanupPlannerTests: XCTestCase {
         path: String? = "/Users/alice/Library/LaunchAgents/com.foo.plist",
         health: HealthState = .broken,
         trust: TrustClass = .unsigned,
-        exec: String? = "/Applications/Gone.app/Contents/MacOS/gone"
+        exec: String? = "/Applications/Gone.app/Contents/MacOS/gone",
+        actionClass: ActionClass = .reversibleMutation,
+        attribution: ResolvedAttribution = ResolvedAttribution()
     ) -> StartupItem {
         StartupItem(
             id: id, mechanism: mechanism, label: "com.foo", displayName: "Foo",
             sourcePath: path,
             recipe: LaunchRecipe(executablePath: exec),
-            trust: trust, health: health)
+            trust: trust, health: health, attribution: attribution,
+            actionClass: actionClass)
     }
 
     func testBrokenUserAgentIsVaultMovable() {
@@ -76,28 +79,31 @@ final class CleanupPlannerTests: XCTestCase {
         XCTAssertTrue(plan.isEmpty)
     }
 
-    func testAppleAndManagedNeverCandidates() {
+    func testMutationForbiddenTrustNeverCandidate() {
         let apple = makeItem(id: "a", trust: .applePlatform)
         let managed = makeItem(id: "b", trust: .managed)
-        XCTAssertTrue(CleanupPlanner.plan(items: [apple, managed], userHomes: homes).isEmpty)
+        let unknown = makeItem(id: "c", trust: .unknown)
+        let conflicting = makeItem(id: "d", trust: .brokenOrConflicting)
+        XCTAssertTrue(CleanupPlanner.plan(
+            items: [apple, managed, unknown, conflicting], userHomes: homes).isEmpty)
     }
 
-    func testRootOwnedDaemonRequiresHelper() {
+    func testRootOwnedDaemonExcludedWhileHelperOperationDisabled() {
         let item = makeItem(
             id: "launchDaemon:com.foo", mechanism: .launchDaemon,
             path: "/Library/LaunchDaemons/com.foo.plist")
         let plan = CleanupPlanner.plan(items: [item], userHomes: homes)
-        XCTAssertEqual(plan.first?.eligibility, .requiresHelper)
+        XCTAssertTrue(plan.isEmpty)
     }
 
-    func testOrphanedLoginItemIsRemovable() {
+    func testPossiblyOrphanedItemNeedsMoreEvidence() {
         let item = makeItem(
             id: "classicLoginItem:/Applications/Gone.app",
             mechanism: .classicLoginItem,
             path: "/Applications/Gone.app",
             health: .possiblyOrphaned)
         let plan = CleanupPlanner.plan(items: [item], userHomes: homes)
-        XCTAssertEqual(plan.first?.eligibility, .loginItemRemoval)
+        XCTAssertTrue(plan.isEmpty)
     }
 
     func testOtherUsersAgentNotVaultMovable() {
@@ -108,11 +114,14 @@ final class CleanupPlannerTests: XCTestCase {
         XCTAssertTrue(plan.isEmpty)
     }
 
-    func testActionableSortsBeforeHelperGated() {
-        let user = makeItem()
-        let root = makeItem(id: "launchDaemon:com.bar", mechanism: .launchDaemon,
-                            path: "/Library/LaunchDaemons/com.bar.plist")
-        let plan = CleanupPlanner.plan(items: [root, user], userHomes: homes)
-        XCTAssertEqual(plan.map(\.eligibility), [.userVaultMove, .requiresHelper])
+    func testReadOnlyUnresolvedAndConflictingAttributionAreExcluded() {
+        let readOnly = makeItem(id: "a", actionClass: .readOnly)
+        var unresolved = makeItem(id: "b")
+        unresolved.recipe?.isUnresolved = true
+        let conflict = makeItem(
+            id: "c", attribution: ResolvedAttribution(hasConflict: true))
+        let plan = CleanupPlanner.plan(
+            items: [readOnly, unresolved, conflict], userHomes: homes)
+        XCTAssertTrue(plan.isEmpty)
     }
 }

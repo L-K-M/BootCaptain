@@ -3,16 +3,15 @@ import Foundation
 /// Plans the built-in "Clean Up" flow for broken/orphaned startup items.
 ///
 /// Scope is deliberately narrow (this is NOT generic orphan deletion):
-/// - Only items with concrete broken/orphaned health are candidates.
-/// - Apple/system and organization-managed items are never candidates.
+/// - Only items with concrete broken health are candidates.
+/// - Mutation-forbidden, conflicting, unresolved, and read-only items are never
+///   candidates.
 /// - The only unprivileged action is a **reversible vault move** of a file the
 ///   current user owns under their own `~/Library/LaunchAgents`, or removal of
 ///   a classic "Open at Login" entry (System Events). Both have precomputed
 ///   inverses and are journaled by the caller.
-/// - Root-owned sources (e.g. `/Library/LaunchDaemons`) are marked
-///   `requiresHelper`: the reversible move is carried out by the privileged
-///   helper after administrator approval (only the vault move/restore is
-///   enabled — see `ActionRequest.Operation.isEnabledInCurrentBuild`).
+/// - Root-owned sources are exposed only after the helper operation is enabled
+///   in a qualified build.
 public enum CleanupPlanner {
     public enum Eligibility: String, Codable, Sendable, Equatable {
         /// Move the source file to the user-level vault (reversible, no root).
@@ -46,9 +45,10 @@ public enum CleanupPlanner {
         var out: [Candidate] = []
         for item in items {
             guard isBrokenEnough(item) else { continue }
-            // Never touch Apple/system or managed items, even broken-looking ones.
-            if item.trust == .applePlatform || item.trust == .appleDistributed
-                || item.trust == .managed { continue }
+            guard !item.trust.isMutationForbidden else { continue }
+            guard item.actionClass == .reversibleMutation else { continue }
+            guard item.recipe?.isUnresolved != true else { continue }
+            guard !item.attribution.hasConflict else { continue }
             if item.isInert { continue }
 
             let reason = brokenReason(item)
@@ -64,8 +64,9 @@ public enum CleanupPlanner {
                     out.append(Candidate(
                         itemID: item.id, displayName: item.displayName, reason: reason,
                         eligibility: .userVaultMove, sourcePath: path))
-                } else if path.hasPrefix("/Library/LaunchDaemons/")
-                            || path.hasPrefix("/Library/LaunchAgents/") {
+                } else if (path.hasPrefix("/Library/LaunchDaemons/")
+                            || path.hasPrefix("/Library/LaunchAgents/")),
+                          ActionRequest.Operation.moveToVault.isEnabledInCurrentBuild {
                     out.append(Candidate(
                         itemID: item.id, displayName: item.displayName, reason: reason,
                         eligibility: .requiresHelper, sourcePath: path))
@@ -83,9 +84,10 @@ public enum CleanupPlanner {
         }
     }
 
-    /// Only concrete, locally-verifiable brokenness qualifies — never "unknown".
+    /// Only concrete brokenness qualifies. "Possibly orphaned" needs repeated
+    /// observation and mounted-volume checks before it can authorize a change.
     static func isBrokenEnough(_ item: StartupItem) -> Bool {
-        item.health == .broken || item.health == .possiblyOrphaned
+        item.health == .broken
     }
 
     static func isUserOwnedAgentPath(_ path: String, userHomes: [String]) -> Bool {
