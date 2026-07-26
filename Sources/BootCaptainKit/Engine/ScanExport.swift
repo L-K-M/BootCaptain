@@ -81,7 +81,8 @@ public struct ScanExport: Sendable {
 
     func redactedNotes(_ item: StartupItem, homes: [String]) -> [String] {
         item.notes.compactMap { note in
-            if item.mechanism == .cron && note.hasPrefix("Command:") { return nil }
+            let normalized = note.trimmingCharacters(in: .whitespaces).lowercased()
+            if normalized.hasPrefix("command:") { return nil }
             return redactAllPaths(note, homes: homes)
         }
     }

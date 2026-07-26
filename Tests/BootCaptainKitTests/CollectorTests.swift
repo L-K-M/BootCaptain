@@ -148,14 +148,14 @@ final class ScanExportTests: XCTestCase {
     }
 
     func testRedactedExportRemovesSensitiveIdentityAndCronCommand() throws {
-        let secret = "token-SUPER-SECRET"
+        let privateValue = "example-private-value"
         let item = StartupItem(
             id: "cron:/Volumes/Homes/alice/private-tab:7",
             mechanism: .cron,
-            label: "/Volumes/Homes/alice/bin/job --token \(secret)",
+            label: "/Volumes/Homes/alice/bin/job --credential \(privateValue)",
             displayName: "cron: /Volumes/Homes/alice/bin/job",
             sourcePath: "/Volumes/Homes/alice/private-tab",
-            notes: ["Command: /Volumes/Homes/alice/bin/job --token \(secret)",
+            notes: ["Command: /Volumes/Homes/alice/bin/job --credential \(privateValue)",
                     "Runs at every reboot (@reboot)."])
         let result = ScanResult(items: [item],
             coverage: CoverageReport(collectors: []), generatedAt: 0)
@@ -167,8 +167,23 @@ final class ScanExportTests: XCTestCase {
         XCTAssertEqual(exported.items[0].displayName, "cron entry")
         XCTAssertNil(exported.items[0].label)
         XCTAssertEqual(exported.items[0].sourcePath, "~/private-tab")
-        XCTAssertFalse(exported.items[0].notes.joined().contains(secret))
+        XCTAssertFalse(exported.items[0].notes.joined().contains(privateValue))
+        XCTAssertTrue(exported.items[0].notes.contains { $0.contains("@reboot") })
         XCTAssertFalse(String(data: data, encoding: .utf8)!.contains("alice"))
+    }
+
+    func testRedactedExportDropsCommandNotesForEveryMechanism() throws {
+        let item = StartupItem(
+            id: "launchAgent:com.example.helper", mechanism: .launchAgent,
+            label: "com.example.helper", displayName: "Example Helper",
+            notes: ["  COMMAND: /usr/bin/helper --credential example-private-value",
+                    "Known vendor helper."])
+        let result = ScanResult(items: [item],
+            coverage: CoverageReport(collectors: []), generatedAt: 0)
+        let data = try ScanExport().json(result, redact: true)
+        let exported = try JSONDecoder().decode(ScanExport.ExportedScan.self, from: data)
+
+        XCTAssertEqual(exported.items[0].notes, ["Known vendor helper."])
     }
 
     func testUnredactedExportPreservesLocalIdentity() throws {
