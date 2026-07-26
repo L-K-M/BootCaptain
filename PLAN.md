@@ -106,7 +106,10 @@ bootstrapped into `gui/<uid>` at login and started then if configured to.
 determine this, and BootCaptain must present the difference:
 
 - **Auto-runs at boot/login:** `RunAtLoad == true`, or `KeepAlive == true`, or
-  `KeepAlive` dict with `SuccessfulExit`/`Crashed` (these imply RunAtLoad).
+  `KeepAlive` dict with `SuccessfulExit` (which itself implies RunAtLoad). Other
+  `KeepAlive` conditions (`Crashed`, `PathState`, `OtherJobEnabled`) are
+  restart-on-condition rules and do **not** by themselves imply a load-time
+  launch — classify them by whether `RunAtLoad`/`SuccessfulExit` is also set.
 - **Scheduled:** `StartInterval` / `StartCalendarInterval`.
 - **Event-triggered:** `WatchPaths`, `QueueDirectories`, `StartOnMount`,
   `LaunchEvents`.
@@ -158,6 +161,12 @@ surfaced in **System Settings › General › Login Items** (renamed **Login Ite
 - **Managed items:** the BTM `Storage` object carries `mdmPayloadsByIdentifier`,
   so an MDM `com.apple.servicemanagement` rule that force-enables and user-locks
   an item ("managed by your organization") is readable straight from the DB.
+- **Eventual consistency:** the BTM/System Settings list is not updated
+  synchronously — changes may not surface until a Service Management maintenance
+  pass runs (reported as "overnight"), so the Settings view can lag on-disk and
+  launchd truth by **up to a day**. BootCaptain must treat BTM/Settings state as
+  eventually-consistent (see §6.3), never as an immediate confirmation that an
+  action "took."
 
 ### 2.3 loginwindow "reopen windows" — the great confuser
 
@@ -245,9 +254,13 @@ several and **reconciles**:
 returns the enable/registration status for a given legacy plist path and —
 confirmed by community tooling that sweeps `/Library/LaunchDaemons` and
 `/Library/LaunchAgents` — answers for arbitrary third-party plists, not just
-the caller's own. It is the one **supported** per-item BTM read, so it should be
-the primary status source, with the `launchctl print-disabled` and BTM-parse
-paths as cross-checks (the API has shipped broken before — see §12).
+the caller's own. It is the one **supported** per-item BTM read. But treat it as
+a *cross-check, not ground truth*: it reportedly regressed in the Sonoma 14.5
+betas and has since returned `.notFound` even for installed, running services
+(see §12). **`launchctl print-disabled` (plus the BTM parse) is the source of
+truth for enable/disable state**; use `statusForLegacyPlist` to corroborate and
+to catch registration nuances the launchd layer doesn't express, and never
+center status logic on it alone.
 
 ---
 
@@ -356,7 +369,9 @@ critical UX: on-demand items should not be presented as login-time savings.
   `launchctl disable gui/$UID/<label>` (persists in
   `/var/db/com.apple.xpc.launchd/disabled.<uid>.plist`) **+** `launchctl bootout
   gui/$UID/<label>` (stops the running instance now). Undo with `enable` +
-  `bootstrap`.
+  `bootstrap`. Agents with `LimitLoadToSessionType = Background` live in the
+  `user/$UID` domain rather than `gui/$UID`, so to be thorough disable in
+  **both** domains.
 - **System daemons/agents (`/Library/…`)** — same verbs with `sudo` and the
   `system/` domain. `/Library/LaunchAgents` items load into *every* user's gui
   domain, so present "disable for me" (per-user override) vs "disable for
@@ -406,6 +421,10 @@ touch even in a power-user mode, including at minimum: `opendirectoryd`,
 
 - **Staged (two-phase) disable:** `bootout` first ("try without it until
   reboot"), persist `disable` only after the user confirms things still work.
+  Confirm that the action took by reading the **launchd** layer
+  (`launchctl print-disabled`, `launchctl print`), *not* by re-reading BTM/System
+  Settings — that view is eventually-consistent (§2.2) and can lag up to a day,
+  so an immediate BTM re-read will produce false "it didn't take" mismatches.
 - **Rescue manifest:** write a plain-text log of every change with exact undo
   commands to a predictable path (e.g. `/Users/Shared/BootCaptain/rescue.txt`),
   so a technician in Recovery can revert without BootCaptain running.
@@ -512,7 +531,8 @@ reports, then optionally match dialogs by owning **pid**.
    from a throttled crash loop). Crash loops show `Service only ran for N
    seconds. Pushing respawn out by 10 seconds.` (10s = default `ThrottleInterval`).
 3. **Crash reports.** `~/Library/Logs/DiagnosticReports` (user; note the path is
-   under `Logs/`) and `/Library/Logs/DiagnosticReports` (root). Since Monterey
+   under `Logs/`) and `/Library/Logs/DiagnosticReports` (admin-readable, so the
+   app process can read it without the root helper). Since Monterey
    these are `.ips` files = **two concatenated JSON documents** (split on the
    first newline). Join `procPath` / `parentPid == 1` / `captureTime` to
    enumerated items; the `termination` namespace gives the plain-English reason
