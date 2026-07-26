@@ -3,17 +3,20 @@ import SwiftUI
 import BootCaptainCore
 import BootCaptainKit
 
-/// Executes the built-in "Clean Up" flow — entirely as the current user, with
-/// no root and no privileged helper:
+/// Executes the built-in "Clean Up" flow for provably-broken startup leftovers.
 ///
 /// - `userVaultMove`: moves a broken plist the user owns from their
-///   `~/Library/LaunchAgents` into a reversible vault under Application
-///   Support, journaled with a precomputed inverse. Nothing is deleted.
+///   `~/Library/LaunchAgents` into a reversible user-scope vault, journaled.
 /// - `loginItemRemoval`: removes a classic "Open at Login" entry via System
-///   Events (the quasi-supported path); undo re-adds it by path.
+///   Events; undo re-adds it by path.
+/// - `requiresHelper`: for broken `/Library/Launch{Daemons,Agents}` plists, the
+///   move is performed by the privileged helper (admin approval once), into a
+///   root-owned vault. Only the reversible move/restore is enabled
+///   (`ActionRequest.Operation.isEnabledInCurrentBuild`); nothing is deleted.
 ///
-/// Root-owned candidates (`requiresHelper`) are surfaced but not acted on —
-/// privileged mutations stay disabled until the Phase-0 work in PLAN.md.
+/// All actions are **idempotent**: an item that has already been cleaned is
+/// never re-attempted (`completedItemIDs`), which is what made repeated
+/// "Clean Up" clicks fail with "vault destination already exists".
 @MainActor
 final class CleanupService: ObservableObject {
     struct PerformedAction: Identifiable {
@@ -26,10 +29,14 @@ final class CleanupService: ObservableObject {
 
     @Published var performed: [PerformedAction] = []
     @Published var isWorking = false
+    /// Items successfully cleaned this session — excluded from any re-run.
+    @Published private(set) var completedItemIDs: Set<String> = []
 
     private let home = NSHomeDirectory()
     private var vaultRoot: String { home + "/Library/Application Support/BootCaptain/Vault" }
-    private var journalDir: String { home + "/Library/Application Support/BootCaptain/Journal" }
+    private var journal: FileJournal {
+        FileJournal(directory: home + "/Library/Application Support/BootCaptain/Journal")
+    }
 
     var userHomes: [String] { [home] }
 
@@ -37,22 +44,27 @@ final class CleanupService: ObservableObject {
         CleanupPlanner.plan(items: items, userHomes: userHomes)
     }
 
-    /// Perform the selected candidates. Only actionable eligibilities run.
-    func perform(_ selected: [CleanupPlanner.Candidate]) async {
+    /// Candidates minus anything already cleaned — what the UI should offer.
+    func pending(from candidates: [CleanupPlanner.Candidate]) -> [CleanupPlanner.Candidate] {
+        candidates.filter { !completedItemIDs.contains($0.itemID) }
+    }
+
+    /// Perform the selected candidates. Already-completed items are skipped, so
+    /// this is safe to call repeatedly.
+    func perform(_ selected: [CleanupPlanner.Candidate], helper: HelperClient) async {
         isWorking = true
         defer { isWorking = false }
-        for candidate in selected {
+        for candidate in selected where !completedItemIDs.contains(candidate.itemID) {
             switch candidate.eligibility {
             case .userVaultMove: await vaultMove(candidate)
             case .loginItemRemoval: await removeLoginItem(candidate)
-            case .requiresHelper: continue
+            case .requiresHelper: await helperVaultMove(candidate, helper: helper)
             }
         }
     }
 
-    /// Undo one performed action. Dispatch on what was actually done: vault
-    /// moves invert through the runner; login-item removals re-add by path.
-    func undo(_ action: PerformedAction) async {
+    /// Undo one performed action. Dispatches on what was actually done.
+    func undo(_ action: PerformedAction, helper: HelperClient) async {
         guard !action.undone, let inverse = action.inverse else { return }
         isWorking = true
         defer { isWorking = false }
@@ -63,32 +75,28 @@ final class CleanupService: ObservableObject {
         case .loginItemRemoval:
             outcome = await addLoginItemBack(path: action.candidate.sourcePath)
         case .requiresHelper:
-            outcome = ActionOutcome(status: .aborted, message: "Nothing to undo.")
+            outcome = await helper.perform(inverse)
+        }
+        if outcome.status == .committed {
+            completedItemIDs.remove(action.candidate.itemID)
         }
         if let idx = performed.firstIndex(where: { $0.id == action.id }) {
             performed[idx] = PerformedAction(
-                candidate: action.candidate,
-                outcome: outcome,
-                inverse: nil,
-                undone: outcome.status == .committed)
+                candidate: action.candidate, outcome: outcome,
+                inverse: nil, undone: outcome.status == .committed)
         }
     }
 
-    // MARK: vault moves
+    // MARK: user-scope vault moves
 
     private func vaultMove(_ candidate: CleanupPlanner.Candidate) async {
         let request = ActionRequest(
             operation: .moveToVault, itemID: candidate.itemID,
             sourcePath: candidate.sourcePath)
-        // Journal prepared → run → committed/indeterminate (PLAN.md §6.3 shape,
-        // user-level scope).
-        let record = journalPrepare(request)
+        let record = journal.prepare(request, at: Date().timeIntervalSince1970)
         let outcome = await runVaultOperation(request)
-        journalComplete(record, status: outcome.status)
-        performed.append(PerformedAction(
-            candidate: candidate, outcome: outcome,
-            inverse: outcome.status == .committed
-                ? ActionJournalLogic.inverse(of: request) : nil))
+        journal.complete(record, status: outcome.status, at: Date().timeIntervalSince1970)
+        recordResult(candidate, request: request, outcome: outcome)
     }
 
     private func runVaultOperation(_ request: ActionRequest) async -> ActionOutcome {
@@ -96,6 +104,17 @@ final class CleanupService: ObservableObject {
         return await Task.detached(priority: .userInitiated) {
             runner.perform(request)
         }.value
+    }
+
+    // MARK: privileged (helper) vault moves — /Library items
+
+    private func helperVaultMove(_ candidate: CleanupPlanner.Candidate, helper: HelperClient) async {
+        let request = ActionRequest(
+            operation: .moveToVault, itemID: candidate.itemID,
+            sourcePath: candidate.sourcePath)
+        // The helper journals its own root-scope prepared/committed record.
+        let outcome = await helper.perform(request)
+        recordResult(candidate, request: request, outcome: outcome)
     }
 
     // MARK: classic login items (System Events)
@@ -106,12 +125,9 @@ final class CleanupService: ObservableObject {
         let outcome = await runAppleScript(script,
             success: "Removed the login item. Undo re-adds it.",
             failure: "Could not remove the login item (System Events automation may need approval).")
-        performed.append(PerformedAction(
-            candidate: candidate, outcome: outcome,
-            inverse: outcome.status == .committed
-                ? ActionRequest(operation: .restoreFromVault, itemID: candidate.itemID,
-                                sourcePath: path)  // marker; undo re-adds by path
-                : nil))
+        let inverse = ActionRequest(operation: .restoreFromVault, itemID: candidate.itemID,
+                                    sourcePath: path)  // marker; undo re-adds by path
+        recordResult(candidate, inverse: inverse, outcome: outcome)
     }
 
     private func addLoginItemBack(path: String?) async -> ActionOutcome {
@@ -134,32 +150,25 @@ final class CleanupService: ObservableObject {
         }.value
     }
 
-    // MARK: journal (user-level)
+    // MARK: result bookkeeping
 
-    private func journalPrepare(_ request: ActionRequest) -> JournalRecord {
-        let record = JournalRecord(
-            id: UUID().uuidString,
-            request: request,
-            status: .prepared,
-            inverse: ActionJournalLogic.inverse(of: request),
-            preparedAt: Date().timeIntervalSince1970)
-        writeJournal(record)
-        return record
+    /// Record an outcome and mark the item completed on success, deriving the
+    /// inverse from the request.
+    private func recordResult(_ candidate: CleanupPlanner.Candidate,
+                              request: ActionRequest, outcome: ActionOutcome) {
+        recordResult(candidate,
+                     inverse: outcome.status == .committed
+                        ? ActionJournalLogic.inverse(of: request) : nil,
+                     outcome: outcome)
     }
 
-    private func journalComplete(_ record: JournalRecord, status: JournalStatus) {
-        var updated = record
-        updated.status = status
-        updated.completedAt = Date().timeIntervalSince1970
-        writeJournal(updated)
-    }
-
-    private func writeJournal(_ record: JournalRecord) {
-        let fm = FileManager.default
-        try? fm.createDirectory(atPath: journalDir, withIntermediateDirectories: true)
-        let url = URL(fileURLWithPath: journalDir + "/\(record.id).json")
-        if let data = try? JSONEncoder().encode(record) {
-            try? data.write(to: url, options: .atomic)
+    private func recordResult(_ candidate: CleanupPlanner.Candidate,
+                              inverse: ActionRequest?, outcome: ActionOutcome) {
+        if outcome.status == .committed {
+            completedItemIDs.insert(candidate.itemID)
         }
+        performed.append(PerformedAction(
+            candidate: candidate, outcome: outcome,
+            inverse: outcome.status == .committed ? inverse : nil))
     }
 }

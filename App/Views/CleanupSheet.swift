@@ -2,20 +2,31 @@ import SwiftUI
 import BootCaptainCore
 
 /// The built-in "Clean Up" flow: broken and orphaned startup leftovers, with a
-/// reversible one-click fix for everything the current user can act on.
+/// reversible one-click fix. User-owned items are moved by the app; system
+/// (`/Library`) items are moved by the privileged helper after admin approval.
+/// Already-cleaned items are excluded, so repeated runs never re-attempt them.
 struct CleanupSheet: View {
     let candidates: [CleanupPlanner.Candidate]
     @EnvironmentObject var scan: ScanViewModel
     @EnvironmentObject var cleanup: CleanupService
+    @EnvironmentObject var helper: HelperClient
     @Environment(\.dismiss) private var dismiss
     @State private var selected: Set<String> = []
-    @State private var ran = false
+    @State private var didInit = false
 
-    private var actionable: [CleanupPlanner.Candidate] {
-        candidates.filter { $0.eligibility != .requiresHelper }
+    /// Candidates that have not already been cleaned this session.
+    private var pending: [CleanupPlanner.Candidate] {
+        cleanup.pending(from: candidates)
     }
-    private var helperGated: [CleanupPlanner.Candidate] {
-        candidates.filter { $0.eligibility == .requiresHelper }
+    private var userActionable: [CleanupPlanner.Candidate] {
+        pending.filter { $0.eligibility == .userVaultMove || $0.eligibility == .loginItemRemoval }
+    }
+    private var systemActionable: [CleanupPlanner.Candidate] {
+        pending.filter { $0.eligibility == .requiresHelper }
+    }
+    /// Selected IDs that are still pending (stale selections drop out).
+    private var effectiveSelection: [CleanupPlanner.Candidate] {
+        pending.filter { selected.contains($0.itemID) }
     }
 
     var body: some View {
@@ -24,18 +35,21 @@ struct CleanupSheet: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if !actionable.isEmpty { actionableSection }
-                    if !helperGated.isEmpty { gatedSection }
-                    if ran && !cleanup.performed.isEmpty { resultsSection }
+                    if !userActionable.isEmpty { userSection }
+                    if !systemActionable.isEmpty { systemSection }
+                    if pending.isEmpty && !cleanup.performed.isEmpty { allDoneNote }
+                    if !cleanup.performed.isEmpty { resultsSection }
                 }
                 .padding(20)
             }
             Divider()
             footer
         }
-        .frame(width: 560, height: 520)
+        .frame(width: 560, height: 540)
         .onAppear {
-            selected = Set(actionable.map(\.itemID))
+            guard !didInit else { return }
+            didInit = true
+            selected = Set(pending.map(\.itemID))
         }
     }
 
@@ -53,44 +67,42 @@ struct CleanupSheet: View {
         .padding(20)
     }
 
-    private var actionableSection: some View {
+    private var userSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Fix now (reversible)").font(.headline)
-            Text("Files are moved to BootCaptain's vault — nothing is deleted, and every change can be undone.")
+            Text("Moved to BootCaptain's vault — nothing is deleted, and every change can be undone.")
                 .font(.caption).foregroundStyle(.secondary)
-            ForEach(actionable) { candidate in
-                Toggle(isOn: binding(for: candidate.itemID)) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(candidate.displayName).fontWeight(.medium)
-                        Text(candidate.reason).font(.caption).foregroundStyle(.secondary)
-                        if let path = candidate.sourcePath {
-                            Text(path).font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                                .lineLimit(1).truncationMode(.middle)
-                        }
-                    }
-                }
-                .toggleStyle(.checkbox)
-            }
+            ForEach(userActionable) { row($0) }
         }
     }
 
-    private var gatedSection: some View {
+    private var systemSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Needs the privileged helper", systemImage: "lock.fill")
+            Label("System items — needs administrator approval", systemImage: "lock.shield")
                 .font(.headline)
-            Text("These live in system locations and need root. Privileged cleanup is disabled in this prototype until the safety work in PLAN.md is complete.")
+            Text("These live in /Library and need root. BootCaptain's helper asks for admin approval once, then moves them to a protected, reversible vault. Nothing is deleted.")
                 .font(.caption).foregroundStyle(.secondary)
-            ForEach(helperGated) { candidate in
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(candidate.displayName).foregroundStyle(.secondary)
-                    if let path = candidate.sourcePath {
-                        Text(path).font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                            .lineLimit(1).truncationMode(.middle)
-                    }
+            ForEach(systemActionable) { row($0) }
+        }
+    }
+
+    private func row(_ candidate: CleanupPlanner.Candidate) -> some View {
+        Toggle(isOn: binding(for: candidate.itemID)) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(candidate.displayName).fontWeight(.medium)
+                Text(candidate.reason).font(.caption).foregroundStyle(.secondary)
+                if let path = candidate.sourcePath {
+                    Text(path).font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                        .lineLimit(1).truncationMode(.middle)
                 }
-                .padding(.leading, 2)
             }
         }
+        .toggleStyle(.checkbox)
+    }
+
+    private var allDoneNote: some View {
+        Label("All broken items handled.", systemImage: "checkmark.seal.fill")
+            .foregroundStyle(.green)
     }
 
     private var resultsSection: some View {
@@ -107,7 +119,7 @@ struct CleanupSheet: View {
                     }
                     Spacer()
                     if action.inverse != nil && !action.undone {
-                        Button("Undo") { Task { await cleanup.undo(action) } }
+                        Button("Undo") { Task { await cleanup.undo(action, helper: helper) } }
                             .controlSize(.small)
                     } else if action.undone {
                         Text("Undone").font(.caption).foregroundStyle(.secondary)
@@ -125,16 +137,15 @@ struct CleanupSheet: View {
                 .keyboardShortcut(.cancelAction)
             Button {
                 Task {
-                    let chosen = actionable.filter { selected.contains($0.itemID) }
-                    await cleanup.perform(chosen)
-                    ran = true
+                    await cleanup.perform(effectiveSelection, helper: helper)
                     scan.scan(diagnose: false)
                 }
             } label: {
-                Text(selected.isEmpty ? "Clean Up" : "Clean Up \(selected.count) Item\(selected.count == 1 ? "" : "s")")
+                let n = effectiveSelection.count
+                Text(n == 0 ? "Clean Up" : "Clean Up \(n) Item\(n == 1 ? "" : "s")")
             }
             .keyboardShortcut(.defaultAction)
-            .disabled(selected.isEmpty || cleanup.isWorking)
+            .disabled(effectiveSelection.isEmpty || cleanup.isWorking)
         }
         .padding(16)
     }

@@ -16,9 +16,14 @@ Read these before changing behavior:
 - This is a research prototype, not a supported release.
 - The portable `BootCaptainCore`, `BootCaptainKit`, and CLI build with SwiftPM.
 - The SwiftUI app and embedded privileged helper are generated from `project.yml` with XcodeGen.
-- Privileged mutation is intentionally disabled. No mechanism has passed the
-  Phase-0 hardware, interruption, authorization, journal, and recovery matrix.
-- Read-only use must not register the helper or install persistent components.
+- Privileged mutation is limited to the reversible Clean Up vault move/restore,
+  performed by the admin-approved helper with durable prepared/committed
+  journaling. The launchd and cron state mutations remain disabled — see
+  `ActionRequest.Operation.isEnabledInCurrentBuild`. No mechanism has passed the
+  full Phase-0 hardware, interruption, authorization, journal, and recovery
+  matrix, so even the enabled move/restore path still needs on-device validation.
+- Read-only use must not register the helper or install persistent components;
+  the helper is registered only on the first privileged Clean Up action.
 
 ## Build and verify
 

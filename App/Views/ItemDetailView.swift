@@ -14,6 +14,14 @@ struct ItemDetailView: View {
         cleanup.candidates(from: [item]).first
     }
 
+    private func cleanupButtonTitle(_ c: CleanupPlanner.Candidate) -> String {
+        switch c.eligibility {
+        case .userVaultMove: return "Move to Vault (reversible)"
+        case .loginItemRemoval: return "Remove Login Item (undoable)"
+        case .requiresHelper: return "Move to Vault (admin, reversible)"
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -95,33 +103,25 @@ struct ItemDetailView: View {
         Section2("Actions") {
             // Built-in cleanup for provably-broken items the user can fix
             // without root: reversible vault move / login-item removal.
-            if let candidate = cleanupCandidate {
-                switch candidate.eligibility {
-                case .userVaultMove, .loginItemRemoval:
-                    HStack {
-                        Button {
-                            Task {
-                                await cleanup.perform([candidate])
-                                actionMessage = cleanup.performed.last?.outcome.message
-                                scan.scan(diagnose: false)
-                            }
-                        } label: {
-                            Label(candidate.eligibility == .userVaultMove
-                                  ? "Move to Vault (reversible)"
-                                  : "Remove Login Item (undoable)",
-                                  systemImage: "bandage.fill")
+            if let candidate = cleanupCandidate, !cleanup.completedItemIDs.contains(candidate.itemID) {
+                HStack {
+                    Button {
+                        Task {
+                            await cleanup.perform([candidate], helper: helper)
+                            actionMessage = cleanup.performed.last?.outcome.message
+                            scan.scan(diagnose: false)
                         }
-                        .buttonStyle(.borderedProminent).tint(.orange)
-                        .disabled(cleanup.isWorking)
-                        if cleanup.isWorking { ProgressView().controlSize(.small) }
+                    } label: {
+                        Label(cleanupButtonTitle(candidate), systemImage: "bandage.fill")
                     }
-                    Text(candidate.reason)
-                        .font(.caption).foregroundStyle(.secondary)
-                case .requiresHelper:
-                    Label("Broken, but in a system location — privileged cleanup is disabled in this prototype.",
-                          systemImage: "lock.fill")
-                        .font(.callout).foregroundStyle(.secondary)
+                    .buttonStyle(.borderedProminent).tint(.orange)
+                    .disabled(cleanup.isWorking)
+                    if cleanup.isWorking { ProgressView().controlSize(.small) }
                 }
+                Text(candidate.eligibility == .requiresHelper
+                     ? "\(candidate.reason) BootCaptain's helper will ask for administrator approval, then move it to a protected, reversible vault."
+                     : candidate.reason)
+                    .font(.caption).foregroundStyle(.secondary)
                 Divider().padding(.vertical, 2)
             }
             switch item.actionClass {

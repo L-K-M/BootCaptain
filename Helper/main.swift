@@ -11,12 +11,19 @@ import BootCaptainKit
 // against the app's designated code-signing requirement, and every target is
 // re-validated immediately before it is touched.
 
+/// Where the helper keeps its durable, root-owned mutation journal and vault.
+enum HelperPaths {
+    static let support = "/Library/Application Support/BootCaptain"
+    static let vault = support + "/Vault"
+    static let journalDir = support + "/Journal"
+}
+
 final class HelperService: NSObject, BootCaptainHelperProtocol, @unchecked Sendable {
-    let runner = ActionRunner()
-    // Mutation stays unavailable until the durable journal, authorization
-    // right, descriptor-safe target validation, and Phase-0 hardware matrix in
-    // PLAN.md are implemented and independently reviewed.
-    let mutationsEnabled = false
+    let runner = ActionRunner(vaultRoot: HelperPaths.vault)
+    let journal = FileJournal(directory: HelperPaths.journalDir)
+    // Only the reversible vault move/restore used by Clean Up is enabled;
+    // launchd/cron mutations stay gated (Core `isEnabledInCurrentBuild`,
+    // PLAN.md §6). This is not a blanket switch — see MutationPolicy.
     // The helper trusts the OS for user enumeration rather than the caller.
     let userHomes: [String] = {
         (try? FileManager.default.contentsOfDirectory(atPath: "/Users"))?
@@ -30,30 +37,34 @@ final class HelperService: NSObject, BootCaptainHelperProtocol, @unchecked Senda
     }
 
     func perform(requestJSON: Data, withReply reply: @escaping (Data) -> Void) {
-        guard mutationsEnabled else {
-            return reply(HelperCodec.encode(ActionOutcome(
-                status: .aborted,
-                message: "Privileged mutations are disabled in this prototype.")))
-        }
         guard let request = HelperCodec.decode(ActionRequest.self, from: requestJSON) else {
             return reply(HelperCodec.encode(ActionOutcome(
                 status: .aborted, message: "Malformed request.")))
+        }
+        // 0. Per-operation enablement. Only reversible vault move/restore is on.
+        guard request.operation.isEnabledInCurrentBuild else {
+            return reply(HelperCodec.encode(ActionOutcome(
+                status: .aborted,
+                message: "This privileged operation is not enabled in this build.")))
         }
         // 1. Portable request validation (allow-listed roots, sane label/domain).
         if case .failure(let rejection) = RequestValidator.validate(request, userHomes: userHomes) {
             return reply(HelperCodec.encode(ActionOutcome(
                 status: .aborted, message: "Rejected by policy: \(rejection).")))
         }
-        // 2. Descriptor-level TOCTOU re-validation of any file target.
-        if let path = request.sourcePath,
-           request.operation == .moveToVault || request.operation == .launchdBootout {
+        // 2. Descriptor-level TOCTOU re-validation of the file being moved out.
+        //    (restoreFromVault's request path is the not-yet-existing original
+        //    destination, so it is validated by the runner's exclusive rename.)
+        if request.operation == .moveToVault, let path = request.sourcePath {
             guard TargetGuard.isSafeToActOn(path: path) else {
                 return reply(HelperCodec.encode(ActionOutcome(
                     status: .aborted, message: "Target failed pre-mutation safety re-check.")))
             }
         }
-        // 3. Execute the typed operation.
+        // 3. Durable journal: prepared -> execute -> terminal (AGENTS.md).
+        let record = journal.prepare(request, at: Date().timeIntervalSince1970)
         let outcome = runner.perform(request)
+        journal.complete(record, status: outcome.status, at: Date().timeIntervalSince1970)
         reply(HelperCodec.encode(outcome))
     }
 
@@ -149,6 +160,14 @@ enum HelperTeam {
 }
 
 // Entry point.
+// Surface any journal records a prior crash left unresolved. We never blindly
+// replay a privileged action on startup (AGENTS.md "idempotent recovery"); we
+// log them so state can be reconciled deliberately.
+let pending = FileJournal(directory: HelperPaths.journalDir).unfinished()
+if !pending.isEmpty {
+    NSLog("BootCaptain helper: \(pending.count) unfinished journal record(s) need reconciliation")
+}
+
 let delegate = ServiceDelegate()
 let listener = NSXPCListener(machServiceName: HelperConstants.machServiceName)
 listener.delegate = delegate
