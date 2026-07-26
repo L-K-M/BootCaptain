@@ -1,27 +1,29 @@
-# BootCaptain — Research & Plan
+# BootCaptain - Research & Plan
 
-*A consumer-friendly, exhaustive macOS startup manager: see everything that
-launches at boot/login, understand what each item is and which app it belongs
-to, disable what you don't need safely and reversibly, and get told plainly
-when a startup item is broken.*
+*A consumer-friendly macOS startup manager: provide broad, versioned coverage
+of the ways software starts at boot/login, explain what each item is and which
+app it belongs to, disable supported items safely and reversibly, and present
+useful evidence when a startup item is broken.*
 
-**Status:** research + architecture plan. **Target OS:** macOS 13 Ventura →
-macOS 26 Tahoe, with explicit handling of legacy mechanisms that linger on
-upgraded Macs. **Founding pain point:** at login a Mac fires off a crowd of
-helpers, and when one fails it throws a useless dialog like *"Could not open
+**Status:** desk research + architecture plan; hardware validation is still
+required. **Production target:** macOS 13 Ventura through macOS 26 Tahoe, with
+explicit handling of legacy mechanisms that linger on upgraded Macs. macOS 27
+Golden Gate is a preview-qualification target, not a production promise.
+**Founding pain point:** at login a Mac fires off a crowd of helpers, and when
+one fails it throws a useless dialog like *"Could not open
 file"* that names nothing. macOS scatters startup items across a dozen opaque
 locations with no clear line back to a recognizable application. BootCaptain's
 job is to make that legible and controllable.
 
-> **A note on confidence.** This plan is built from a verified research pass
-> (primary sources: Apple developer docs and man pages, the Apple Platform
-> Security guide, Howard Oakley/eclecticlight.co, Objective-See, Csaba
-> Fitzl/theevilbit, Der Flounder/Rich Trouton, and the osquery schema). Where a
-> behavior is Apple-documented it is treated as stable; where it relies on
-> undocumented tools (`sfltool`), private stores (the BTM database), or
-> unstable output (`launchctl print`), that is called out. A consolidated list
-> of things that still need confirmation on real 13/14/15/26 hardware is in
-> [§12](#12-open-questions--must-verify-on-hardware).
+> **A note on confidence.** This plan was checked against Apple documentation,
+> current man pages, open-source implementations, and reputable independent
+> research. That is not the same as release-by-release validation. Private
+> stores, undocumented command output, reverse-engineered behavior, and forum
+> reports are observations, not contracts. Each collector must expose its
+> source, parser version, permissions, timestamp, and coverage gaps. The
+> load-bearing items still requiring clean-install and upgraded-hardware tests
+> are in [§12](#12-open-questions-and-hardware-validation), and the evidence
+> behind reviewed claims is recorded in [`EVIDENCE.md`](EVIDENCE.md).
 
 ---
 
@@ -29,17 +31,17 @@ job is to make that legible and controllable.
 
 1. [Why this is hard](#1-why-this-is-hard)
 2. [Where macOS stores things that launch at startup/login](#2-where-macos-stores-things-that-launch-at-startuplogin)
-3. [Exhaustive collection strategy](#3-exhaustive-collection-strategy)
+3. [Collection and reconciliation strategy](#3-collection-and-reconciliation-strategy)
 4. [System vs. third-party: telling needed from unneeded](#4-system-vs-third-party-telling-needed-from-unneeded)
 5. [Attribution: associating an item with a recognizable app](#5-attribution-associating-an-item-with-a-recognizable-app)
 6. [Safe disabling and the privilege model](#6-safe-disabling-and-the-privilege-model)
-7. [Diagnosing startup failures — the founding feature](#7-diagnosing-startup-failures--the-founding-feature)
+7. [Diagnosing startup failures](#7-diagnosing-startup-failures)
 8. [Out-of-the-box ideas, honestly rated](#8-out-of-the-box-ideas-honestly-rated)
 9. [Prior art and where BootCaptain fits](#9-prior-art-and-where-bootcaptain-fits)
 10. [Proposed architecture](#10-proposed-architecture)
 11. [Phased roadmap](#11-phased-roadmap)
-12. [Open questions — must verify on hardware](#12-open-questions--must-verify-on-hardware)
-13. [Sources](#13-sources)
+12. [Open questions and hardware validation](#12-open-questions-and-hardware-validation)
+13. [Evidence policy and sources](#13-evidence-policy-and-sources)
 
 ---
 
@@ -49,126 +51,149 @@ Three structural facts make macOS startup items uniquely opaque, and each one
 is a design constraint for BootCaptain:
 
 1. **There is no single list.** "Runs at login" is spread across launchd
-   (four+ directories × three domains), the Ventura Background Task Management
-   database, and a long tail of legacy and plugin-host mechanisms (cron,
-   periodic, login hooks, audio plugins, Finder Sync extensions, config
-   profiles…). Apple's own System Settings pane shows only the subset that
-   Background Task Management knows about.
-2. **The system is silent about failures.** launchd is a daemon; it never draws
-   UI. When a job's executable is missing it writes one line to the unified log
-   and moves on. The scary dialogs users actually see are drawn by *the launched
-   program itself* (an updater, a Java stub, an AppleScript applet) — which is
-   exactly why the text is generic and unattributed.
+   directories and domains, Background Task Management (BTM), classic login
+   items, window restoration, managed background tasks, and legacy schedulers.
+   Extensions and plugin-host mechanisms form a related but distinct forensic
+   surface. System Settings intentionally presents scoped views rather than a
+   complete execution graph.
+2. **Historical evidence is incomplete.** launchd is not a user-interface
+   process, but a launched program, interpreter, child, or OS broker can present
+   an error. Unified logs are retained and redacted according to system policy,
+   current launchd state is not history, and not every failure generates a crash
+   report. BootCaptain can prove some failures; it cannot prove that an item was
+   never attempted from an absence of evidence.
 3. **Items don't announce who they belong to.** A file called
    `com.foo.helperd.plist` running `/bin/bash` gives the user nothing. The
    signals that *do* identify a vendor (code-signing Team ID, package receipts,
    the Ventura `AssociatedBundleIdentifiers` key, Apple's own attribution table)
    have to be actively gathered and cross-checked.
 
-BootCaptain therefore has to (a) enumerate every mechanism and reconcile
-on-disk state against live state, (b) resolve identity from multiple
-independent signals, (c) disable through the mechanisms macOS actually honors
-while never touching what would break the machine, and (d) reconstruct the
-failure story from logs and crash reports because the OS won't hand it over.
+BootCaptain therefore has to (a) maintain a published, versioned taxonomy and
+report partial coverage instead of claiming unknowable completeness, (b)
+reconcile configured, authorized, loaded, running, and observed state without
+collapsing them into one Boolean, (c) resolve identity from independent signals,
+(d) mutate only mechanisms with a tested restore path, and (e) build a
+confidence-rated failure timeline from the evidence macOS retained.
 
 ---
 
 ## 2. Where macOS stores things that launch at startup/login
 
-### 2.1 launchd — the core (LaunchAgents & LaunchDaemons)
+### 2.1 launchd - the core (LaunchAgents & LaunchDaemons)
 
 `launchd` (PID 1) is the primary startup mechanism. Jobs are property lists
 (XML or binary) in these directories:
 
 | Path | Domain | Owner | Writable | Notes |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `/System/Library/LaunchDaemons` | system | Apple | No (sealed SSV) | Hundreds of Apple daemons; read-only even to root. |
-| `/System/Library/LaunchAgents` | per-user (gui) | Apple | No (sealed SSV) | Apple per-user agents, loaded at every login. |
-| `/Library/LaunchDaemons` | system | third-party | root | The standard third-party daemon location. Must be `root:wheel`, not world-writable, or launchd refuses it. |
-| `/Library/LaunchAgents` | per-user | third-party | root | Loaded into **every** user's session at login. |
+| `/System/Library/LaunchAgents` | per-user | Apple | No (sealed SSV) | Apple agent definitions considered when an applicable user/login domain is bootstrapped. |
+| `/Library/LaunchDaemons` | system | third-party | root | The standard third-party daemon location. Plists must be root-owned and disallow group/world writes. |
+| `/Library/LaunchAgents` | per-user | third-party | root | System-wide definitions considered for each applicable user/login domain, subject to session eligibility and overrides. |
 | `~/Library/LaunchAgents` | that user | user | user | Per-user agents; folder often absent on a fresh account. |
-| `/Library/Apple/System/Library/Launch{Daemons,Agents}` | system / per-user | Apple | No (SIP-restricted) | Apple software updated outside the SSV — e.g. XProtect Remediator, Rosetta's `oahd`. Readable, not modifiable. |
-| `<App>.app/Contents/Library/Launch{Daemons,Agents}/*.plist` | via SMAppService | third-party | (bundle) | **Ventura+**: SMAppService-registered items live *inside the app bundle* and never appear under `/Library`. Must be found via BTM or by scanning app bundles. |
-| `<App>.app/Contents/Library/LoginItems/*.app` | gui | third-party | (bundle) | Legacy `SMLoginItemSetEnabled` helper apps. |
-| `/Library/PrivilegedHelperTools/<label>` + generated `/Library/LaunchDaemons/<label>.plist` | system | third-party | root | Legacy `SMJobBless` privileged helpers; common on real systems, orphans are prime cleanup targets. |
+| `/Library/Apple/System/Library/Launch{Daemons,Agents}` | system / per-user | Apple | No (SIP-restricted) | Apple software updated outside the SSV, e.g. XProtect Remediator and Rosetta's `oahd`. Readable, not modifiable. |
+| `<App>.app/Contents/Library/Launch{Daemons,Agents}/*.plist` | via SMAppService | third-party | (bundle) | **Ventura+**: SMAppService registers bundled plists without copying them to `/Library`. Discover through app inventory, BTM, and live launchd evidence. |
+| `<App>.app/Contents/Library/LoginItems/*.app` | gui | third-party | (bundle) | Used by modern `SMAppService.loginItem` and legacy `SMLoginItemSetEnabled` helpers. |
+| `/Library/PrivilegedHelperTools/<label>` + `/Library/LaunchDaemons/<label>.plist` | system | third-party | root | Legacy, macOS 13-deprecated `SMJobBless` helpers remain common. An unmatched file is evidence to investigate, not permission to delete it. |
 
 Jobs can also be bootstrapped from **arbitrary paths** (`launchctl bootstrap`
 accepts any path), so a loaded job whose origin plist is outside the canonical
 directories is a signal worth surfacing.
 
-**Domains and timing:** `system` (boot, runs as root), `user/<uid>` (background
-agents, present for any session including SSH), `gui/<uid>` (the GUI login
-session — where `LaunchAgents` load). `pid/<pid>` hosts embedded XPC services
-and is *not* a startup surface. "Runs at login" for an agent means it is
-bootstrapped into `gui/<uid>` at login and started then if configured to.
+**Domains and timing:** `system` is the privileged domain; jobs default to root
+but can specify `UserName`/`GroupName`. `user/<uid>` can exist without a GUI
+login. `login/<asid>` is a concrete GUI audit session and `gui/<uid>` is its
+convenient alias. GUI and user domains share namespaces but contain distinct
+services. `pid/<pid>` hosts process-scoped XPC services and is not itself a
+startup surface. Enumerate concrete active domains instead of assuming one
+domain per visible user ([L-03](EVIDENCE.md#launchd-and-service-management)).
 
-**The classification core — does it actually run at startup?** The plist keys
+**The classification core: does it actually run at startup?** The plist keys
 determine this, and BootCaptain must present the difference:
 
-- **Auto-runs at boot/login:** `RunAtLoad == true`, or `KeepAlive == true`, or
-  `KeepAlive` dict with `SuccessfulExit` (which itself implies RunAtLoad). Other
-  `KeepAlive` conditions (`Crashed`, `PathState`, `OtherJobEnabled`) are
-  restart-on-condition rules and do **not** by themselves imply a load-time
-  launch — classify them by whether `RunAtLoad`/`SuccessfulExit` is also set.
+- **Initial speculative launch:** `RunAtLoad == true`, any `KeepAlive` value, or
+  legacy `OnDemand == false`. Apple documents that `KeepAlive`, including its
+  dictionary form, implicitly implies `RunAtLoad`; dictionary members describe
+  when the job should remain alive or restart
+  ([L-04](EVIDENCE.md#launchd-and-service-management)).
 - **Scheduled:** `StartInterval` / `StartCalendarInterval`.
 - **Event-triggered:** `WatchPaths`, `QueueDirectories`, `StartOnMount`,
   `LaunchEvents`.
-- **On-demand only:** `MachServices` / `Sockets` and none of the above — the
-  job is *registered* at boot but **no process runs** until a client asks for
-  it. Disabling these breaks app features rather than saving boot time; they
-  should be down-ranked as disable candidates and clearly labeled.
+- **On-demand only:** `MachServices` / `Sockets` and none of the above - the
+  definition is registered when its applicable domain/session is bootstrapped,
+  but **no process runs** until a client asks for it. Disabling these breaks app
+  features rather than saving boot time; they should be down-ranked as disable
+  candidates and clearly labeled.
 
-Other keys BootCaptain reads: `Label` (the primary key — jobs are keyed by the
+Trigger dimensions are independent because a job can have several. "On-demand
+only" is the derived fallback when no speculative, scheduled, or event trigger
+applies.
+Other keys BootCaptain reads: `Label` (the primary key - jobs are keyed by the
 `Label` inside the file, *not* the filename), `Program`/`ProgramArguments`,
 `BundleProgram` (bundle-relative, SMAppService), `AssociatedBundleIdentifiers`
-(Ventura+, attribution), `LimitLoadToSessionType`, `Disabled` (a *default* only
-— the override database wins), and the standard-out/error paths (useful UI
-info). Unknown keys are silently ignored by launchd.
+  (Ventura+, attribution), `LimitLoadToSessionType`, `Disabled` (a *default* only;
+  the override database wins), and the standard-out/error paths (useful UI
+info). Preserve unknown keys and parser failures so a newer OS cannot silently
+turn an item into a misleading partial record.
 
-### 2.2 Background Task Management — the Ventura 13 watershed
+### 2.2 Background Task Management - the Ventura 13 watershed
 
-macOS 13 unified all third-party persistence (login items, launchd
-agents/daemons, embedded helpers) under **Background Task Management (BTM)**,
-surfaced in **System Settings › General › Login Items** (renamed **Login Items
-& Extensions** in macOS 15, unchanged in 26).
+macOS 13 introduced **Background Task Management (BTM)** as an authorization and
+visibility layer for classic login items, Service Management items, and items
+from managed profiles. It does **not** cover all persistence mechanisms. BTM is
+surfaced in **System Settings > General > Login Items** (renamed **Login Items &
+Extensions** in macOS 15).
 
 - **Daemon:** `backgroundtaskmanagementd`, inside
   `/System/Library/PrivateFrameworks/BackgroundTaskManagement.framework`
   (there is a `backgroundtaskmanagementd(8)` man page; note the common claim
-  that it lives in `/usr/libexec` is wrong for 13+). A per-user
-  `BackgroundTaskManagementAgent` posts the "Login Items Added" notifications.
-- **Database:** `/private/var/db/com.apple.backgroundtaskmanagement/BackgroundItems-v<N>.btm`
-  (root-only). It is an **NSKeyedArchiver binary plist, not SQLite**. The schema
-  version churns aggressively across releases — **v4** (13.0), **v7** (13.1),
-  **v8** (Sonoma 14), **v13** (Sequoia 15.2), **v16** (Tahoe 26, early 2026).
-  **Never hard-code the version — glob `BackgroundItems-v*.btm` and take the
-  newest**, exactly as Objective-See's open-source **DumpBTM** parser does.
-- **Record fields** (per DumpBTM's reverse-engineered schema): `uuid`, `name`,
-  `developerName` (from the signing certificate), `teamIdentifier`, `type`,
+  that it lives in `/usr/libexec` is wrong for documented 13+ targets).
+- **Private database:** observed releases store an NSKeyedArchiver archive named
+  `BackgroundItems-v<N>.btm` below
+  `/private/var/db/com.apple.backgroundtaskmanagement/`. Its path, filename,
+  classes, schema, and permissions are implementation details. Discover all
+  candidates as separate snapshots. Select a canonical store only through an
+  OS-build-qualified rule plus coherence checks. If several remain plausible,
+  preserve the ambiguity and derive no effective state or action from a merged
+  view; do not select a lexically "newest" filename or hard-code an unverified
+  version map.
+- **Observed record fields** (per DumpBTM's reverse-engineered schema): `uuid`,
+  `name`, `developerName`, `teamIdentifier`, `type`,
   `disposition`, `identifier`, `url`, `executablePath`, `bundleIdentifier`,
   `associatedBundleIdentifiers`, `container`/parent, `embeddedItems`, `bookmark`
   (for login items), `lightweightRequirement`. Type is a bit-flag: app `0x2`,
   login item `0x4`, agent `0x8`, daemon `0x10`, developer-grouping `0x20`,
-  legacy `0x10000`, curated `0x80000`. **Disposition** is a bitmask: enabled
-  `0x1`, allowed `0x2`, hidden `0x4`, notified `0x8`. A subtle but important
-  point: disabling in System Settings may clear the **allowed** bit rather than
-  the **enabled** bit, so BootCaptain must compute "will it run" as
-  **enabled AND allowed**, not from one bit.
-- **Reading it:** `sudo sfltool dumpbtm` (root; likely Full Disk Access too for
-  the store directory) dumps it as undocumented text; parsing the archive
-  directly (DumpBTM approach) is more robust. `sfltool` has no man page and its
-  output format drifts between releases — parse defensively.
-- **Managed items:** the BTM `Storage` object carries `mdmPayloadsByIdentifier`,
-  so an MDM `com.apple.servicemanagement` rule that force-enables and user-locks
-  an item ("managed by your organization") is readable straight from the DB.
-- **Eventual consistency:** the BTM/System Settings list is not updated
-  synchronously — changes may not surface until a Service Management maintenance
-  pass runs (reported as "overnight"), so the Settings view can lag on-disk and
-  launchd truth by **up to a day**. BootCaptain must treat BTM/Settings state as
-  eventually-consistent (see §6.3), never as an immediate confirmation that an
-  action "took."
+  legacy `0x10000`, curated `0x80000`. Disposition bits have also been observed,
+  but no Apple contract defines a stable `enabled AND allowed` "will run"
+  formula. Preserve raw values with the decoder and OS version; never make a
+  safety decision from a private bit alone. `developerName` is an opaque private
+  display field, not validated certificate identity; keep it separate from the
+  independently verified signer and show it only as a historical hint.
+- **Reading it:** Apple documents `sfltool dumpbtm` for diagnostics, but not a
+  stable machine-readable format. Direct archive decoding is equally private,
+  not inherently more robust. Implement both as independently versioned
+  adapters, probe their actual permission requirements, and report degraded
+  coverage on failure ([B-01 through B-04](EVIDENCE.md#btm-login-items-and-managed-tasks)).
+- **Managed items:** correlate BTM's observed management metadata with installed
+  `com.apple.servicemanagement` profiles. On macOS 15+, also collect supervised
+  Declarative Device Management (DDM)
+  configuration `com.apple.configuration.services.background-tasks`, which can
+  install scripts, executables, and launchd configurations in protected
+  system-managed storage. Where management integration exposes it, collect the
+  separate `services.background-task` status item. Managed rows are read-only
+  and direct the user to their administrator
+  ([B-06 and B-07](EVIDENCE.md#btm-login-items-and-managed-tasks)).
+- **Consistency:** timestamp every source and tolerate disagreement, but do not
+  invent a universal convergence deadline. Apple's 24-hour language concerns
+  notification suppression, not a guarantee that BTM state converges within a
+  day.
 
-### 2.3 loginwindow "reopen windows" — the great confuser
+**Classic Open at Login items are a first-class source.** They can be apps,
+documents, folders, volumes, or server connections, not just helper apps. The
+collector must retain unresolved bookmarks as evidence and must not mount a
+volume or show resolution UI merely to inspect one.
+
+### 2.3 loginwindow "reopen windows" - the great confuser
 
 Apps can relaunch at login **without being login items at all**, via the
 "Reopen windows when logging back in" checkbox (Transparent App Lifecycle):
@@ -179,185 +204,213 @@ Apps can relaunch at login **without being login items at all**, via the
   com.apple.loginwindow TALAppsToRelaunchAtLogin`.
 - Per-app window state: `~/Library/Saved Application State/<bundle-id>.savedState/`.
 
-This is the classic source of *"why does X launch at login when it's not in
-Login Items?"* — BootCaptain should surface it as a distinct "reopened windows"
-category with one-click clear.
+This private schema is a useful, best-effort explanation for *"why does X launch
+at login when it isn't a login item?"* It needs release-specific adapters and
+must degrade to unknown when parsing fails. A supported remediation is the
+logout/restart **Reopen windows** checkbox. An advanced action may back up and
+clear the pending private snapshot, but must explain that this does not disable
+future window restoration.
 
-### 2.4 The legacy & obscure long tail (the completeness census)
+### 2.4 Legacy and adjacent execution surfaces
 
-To honestly claim "we show you everything," BootCaptain must census these too.
-Alive-on-current-macOS status and disable method per mechanism:
+These mechanisms matter on upgraded, managed, or unusual Macs, but many do not
+literally run at boot or GUI login. Each collector must label its trigger and
+scope rather than mixing every executable extension into one startup list.
 
-| Mechanism | Path(s) | Alive now? | Enumerate | Disable |
-|---|---|---|---|---|
-| StartupItems (SystemStarter) | `/Library/StartupItems/` | **Dead** — SystemStarter removed in 10.10 | `ls` | delete folder (inert cruft) |
-| `/etc/rc.*`, `/etc/launchd.conf` | `/etc/…` | **Dead** since 10.10 | read files | remove (inert) |
-| cron | `/usr/lib/cron/tabs/<user>` | **Alive** (deprecated) | `crontab -l`, `sudo ls /usr/lib/cron/tabs/` | comment lines, rewrite via `crontab` |
-| at / atrun | `/var/at/jobs/` | Alive but **off by default** | `atq` | `atrm`; keep atrun disabled |
-| periodic | `/etc/periodic/{daily,weekly,monthly}/`, `/usr/local/etc/periodic/` | **Alive** | `ls`, `cat /etc/periodic.conf` | remove dropped script |
-| Login/Logout hooks | `com.apple.loginwindow` `LoginHook` | **Zombie** — fires ≤13, not on 14+ | `sudo defaults read com.apple.loginwindow LoginHook` | `sudo defaults delete …` |
-| emond | `/etc/emond.d/rules/*.plist` | **Removed in 13.0** | `ls` | remove (inert; red flag if present) |
-| Kernel extensions | `/Library/Extensions/` | Alive, heavily gated | `kmutil showloaded` | remove + rebuild collection; revoke approval |
-| System Extensions (Network/Endpoint Security/DriverKit) | `<App>/Contents/Library/SystemExtensions/`, staged in `/Library/SystemExtensions/` | **Alive — the modern kext** | `systemextensionsctl list` | app-initiated deactivation / delete app; `systemextensionsctl uninstall` needs **SIP disabled** |
-| Audio HAL plugins | `/Library/Audio/Plug-Ins/HAL/*.driver` | **Alive** — loaded by `coreaudiod` at boot | `ls` | remove `.driver`, `killall coreaudiod` |
-| Authorization plugins | `/Library/Security/SecurityAgentPlugins/*.bundle` | **Alive** — run at login window via `system.login.console` | `security authorizationdb read system.login.console` | rewrite rule + remove bundle (lockout risk) |
-| Finder Sync / File Provider / Widget extensions | inside app bundles (`pluginkit`) | **Alive** — run ~login | `pluginkit -mAvvv` | `pluginkit -e ignore -i <id>`, System Settings |
-| Dock tile plugins | `NSDockTilePlugIn` in a Docked app | Alive (obscure) | scan Dock apps' Info.plist | remove plugin / remove from Dock |
-| Configuration profiles / MDM | `/var/db/ConfigurationProfiles/` | **Alive** | `sudo profiles show -type configuration` | `sudo profiles remove -identifier <id>` (removable only) |
-| Cryptex-provided launchd jobs (Apple) | `/System/Cryptexes/`, `/System/Volumes/Preboot/Cryptexes/` | Alive (Apple only) | enumerate **live** launchd domain, not just folders | N/A |
-| Shell rc files | `/etc/zshenv`, `~/.zshenv`, `~/.zprofile`, `~/.zshrc`, bash equivalents, `~/.ssh/rc` | Alive — **shell start, not GUI login** | read files | edit files (advanced view) |
-| DYLD insertion / `launchctl setenv` | launchd job env, `DYLD_INSERT_LIBRARIES` | Alive but constrained (dyld strips for hardened/SIP) | inspect job env | remove the setting/launch item |
+| Mechanism | Paths / evidence | Current treatment | Action policy |
+| --- | --- | --- | --- |
+| StartupItems (SystemStarter) | `/Library/StartupItems/` | Inert since SystemStarter's removal; report upgraded-system artifacts | Read-only; offer documented manual cleanup only after attribution |
+| `launchd.conf` | `/etc/launchd.conf` | Documented as ignored | Read-only artifact |
+| `rc` scripts | `/etc/rc.server`, `/etc/rc.cdrom`, `/etc/rc.netboot`, other `/etc/rc.*` | Some are still referenced by internal boot tasks on observed releases; verify each target OS | Read-only until fixture tests establish execution and recovery |
+| cron | `/etc/crontab`, `/usr/lib/cron/tabs/<user>` | Officially supported legacy scheduler; includes `@reboot` | User tabs: qualified `crontab` round-trip; `/etc/crontab`: separate descriptor-safe parser/action; see §6.1 |
+| at / atrun | `/usr/lib/cron/jobs`, root `atq`, `com.apple.atrun` state | Scheduler exists but `atrun` is disabled by default | Read-only; BootCaptain offers no job or scheduler mutation |
+| periodic | configured periodic directories and `periodic.conf*` | Version-sensitive; present on 13/14 and reported removed on 15+ | Detect capability; residual files are artifacts unless another execution edge exists |
+| Login/Logout hooks | system/root `com.apple.loginwindow` preferences and managed `LoginWindowScripts` payload | Deprecated behavior; exact 13/14/15/26 cutoff is unverified | Read-only until per-release execution and restore tests pass |
+| emond | daemon presence and `/etc/emond.d/rules/*.plist` | Release behavior is not sufficiently documented | Read-only evidence; do not label inert solely from a version number |
+| Kernel extensions | `/Library/Extensions`, loaded state, AuxKC/approval/reboot state | Active but heavily gated; installed is not the same as loaded | Route to vendor uninstaller or an explicit Apple recovery workflow |
+| System extensions | bundled/staged extension, approval and active state | Network, Endpoint Security, DriverKit, camera, and audio families differ | Route to the owning app, System Settings, or MDM; do not use developer-only reset/uninstall tools |
+| Audio HAL plug-ins | `/Library/Audio/Plug-Ins/HAL/*.driver`, host evidence | Host-loaded audio code | Guided vendor uninstall only; do not kill `coreaudiod` as a generic action |
+| Authorization plug-ins | `/Library/Security/SecurityAgentPlugins`, authorization database | Login-window code with lockout risk | Read-only by default; never rewrite authorization rules automatically |
+| App extensions | System Settings, app bundles, `pluginkit` diagnostic output | Installed, selected, and executing are different states | Guide to System Settings/owning app; never delete nested signed code or rely on debug elections |
+| Dock tile plug-ins | `NSDockTilePlugIn` in Dock applications | Host-triggered, not necessarily login execution | Remove the app from the Dock or use vendor guidance; never alter its signed bundle |
+| Profiles and managed login-item rules | installed profile metadata, BTM, `profiles` diagnostics | Organization-owned policy | Read-only; direct the user to an administrator |
+| DDM background tasks (15+) | live launchd evidence and `services.background-task` status where available | Protected managed executables/scripts/launchd jobs | Read-only; direct the user to an administrator |
+| Cryptex launchd jobs | live launchd evidence and cryptex paths | Apple system content | Read-only |
+| Shell / SSH / PAM startup | shell rc files, `/etc/ssh/sshrc`, `~/.ssh/rc`, forced commands, PAM configuration | Triggered by shell, SSH, or authentication, not GUI login | Advanced forensic view; no generic mutation |
+| Persistent environment sources | launchd `EnvironmentVariables`, `launchctl config ... path`, source job/script | An environment value is behavior, not persistence by itself | Act on the owning source; `launchctl setenv` alone is not persistent across restarts |
 
-Two design implications fall out of this table. First, **enumerate the live
-launchd domain, not just directories** (`launchctl print system` + BTM) —
-otherwise cryptex- and profile-injected jobs are invisible and the
-exhaustiveness claim is false. Second, **tier the UI by "does it actually run
-at login"**: shell rc, PATH helpers, PAM, and on-demand plugin hosts belong in
-an advanced/forensic view clearly labeled *when* they run, not in the core
-list.
+The product has two explicit boundaries. **Core startup/background** covers
+launchd, SMAppService, BTM, classic login items, window restoration, managed
+background tasks, cron/at, and release-supported periodic jobs. **Advanced
+execution surfaces** covers extensions, plug-ins, shell/SSH/PAM, Folder Actions,
+Quick Look/Spotlight importers, SSO components, browser add-ons, and other
+host-triggered mechanisms. The product promise is coverage of the published
+taxonomy for the detected OS build, accompanied by a visible coverage report.
 
 ---
 
-## 3. Exhaustive collection strategy
+## 3. Collection and reconciliation strategy
 
 No single source is complete or trustworthy alone, so BootCaptain collects from
-several and **reconciles**:
+several, preserves provenance, and **reconciles without inventing certainty**:
 
-1. **Scan disk.** Walk every §2.1 directory plus app-bundle-embedded plists
-   (`*.app/Contents/Library/{LaunchDaemons,LaunchAgents,LoginItems}`) across
-   `/Applications`, `~/Applications`, Setapp, Homebrew casks, and other app
-   locations. Parse each plist (`PropertyListSerialization` handles binary +
-   XML). Record path, mtime, `Label`, trigger classification (§2.1), program
-   path.
-2. **Snapshot loaded state.** `launchctl print system` and, per logged-in user,
-   `launchctl print gui/<uid>` / `user/<uid>`; `launchctl print <domain>/<label>`
-   yields the origin plist `path` for each label — the reconciliation hook.
-   Treat all `launchctl print` output as **unstable** (the man page says it's
-   "not API") — pin parsers per OS version behind integration tests.
-3. **Snapshot BTM.** Parse `BackgroundItems-v*.btm` (DumpBTM-style) or fall back
-   to `sudo sfltool dumpbtm` text. This is the closest thing macOS ships to
-   BootCaptain's own data model and the only source that includes
-   SMAppService-in-bundle items.
-4. **Snapshot disabled state.** `launchctl print-disabled` per domain, plus the
-   override plists `/private/var/db/com.apple.xpc.launchd/disabled.plist` and
-   `disabled.<uid>.plist`.
-5. **Census the long tail** (§2.4): cron, periodic, at, system extensions
-   (`systemextensionsctl list`), audio HAL, authorization plugins, `pluginkit`,
-   dock tiles, config profiles, loginwindow relaunch list.
-6. **Diff and reconcile.** on-disk + loaded = normal; on-disk + not loaded =
-   disabled/malformed/wrong-session; loaded + not in canonical dirs = surfaced
-   prominently (dev tooling or something worth a look); override entry with no
-   plist = stale override to offer for cleanup; BTM record whose file is gone =
-   ghost item.
+1. **Inventory files and applications.** Walk the canonical §2.1 directories.
+   Discover applications through Launch Services/Spotlight, mounted volumes,
+   BTM URLs, and live launchd origins instead of assuming a fixed list of app
+   folders. Inspect embedded LaunchAgents, LaunchDaemons, and LoginItems. Record
+   file identity, ownership/mode, mtime, raw plist, parse errors, label, program,
+   and all trigger dimensions.
+2. **Snapshot every observable launchd domain.** Query `system`, all active
+   `user/<uid>` domains, and concrete `login/<asid>` domains. `launchctl print`
+   is explicitly **not API**; keep it behind build-tested diagnostic adapters,
+   make every field (including origin path) optional, and expose parser failure
+   rather than treating a missing field as a missing job.
+3. **Collect BTM and classic login items.** Independently adapt `sfltool dumpbtm`
+   and the private archive, collect app/user/login-item records including
+   non-app bookmarks, and scan embedded Service Management content. No one
+   source is exclusive or authoritative.
+4. **Collect state as separate axes.** Use `launchctl print-disabled` per domain
+   for the documented launchd override view. Treat direct override files as
+   versioned, read-only forensic artifacts; `launchctl` warns that its external
+   state must not be manipulated directly. Retain BTM authorization,
+   registration, loaded state, process state, and observation history
+   independently.
+5. **Collect managed state.** Correlate configuration profiles, managed
+   ServiceManagement rules, and macOS 15+ DDM background tasks/status. Live-only
+   managed jobs are valid even if protected source files cannot be read.
+6. **Run core and advanced collectors.** Apply the §2.4 OS capability matrix and
+   record skipped collectors, denied permissions, unsupported schemas, and
+   unknown types/bits as first-class coverage results.
+7. **Reconcile cautiously.** Disk-only, live-only, or BTM-only records each have
+   several legitimate explanations. Produce candidate explanations, not cleanup
+   verdicts. Recheck mounted volumes, active domains, parser coverage, current
+   signatures, and a later scan before calling an item orphaned. Never offer
+   deletion solely because a BTM record, override, or source path is unmatched.
 
-**Supported read shortcuts.** `SMAppService.statusForLegacyPlist(at:)` (13+)
-returns the enable/registration status for a given legacy plist path and —
-confirmed by community tooling that sweeps `/Library/LaunchDaemons` and
-`/Library/LaunchAgents` — answers for arbitrary third-party plists, not just
-the caller's own. It is the one **supported** per-item BTM read. But treat it as
-a *cross-check, not ground truth*: it reportedly regressed in the Sonoma 14.5
-betas and has since returned `.notFound` even for installed, running services
-(see §12). **`launchctl print-disabled` (plus the BTM parse) is the source of
-truth for enable/disable state**; use `statusForLegacyPlist` to corroborate and
-to catch registration nuances the launchd layer doesn't express, and never
-center status logic on it alone.
+The state model therefore has at least: **configured source**, **registration**,
+**user/management authorization**, **launchd override per domain**, **loaded**,
+**running**, and **historical observation**. The UI may summarize them, but the
+action engine must consume the individual facts and their provenance.
+
+**Supported read shortcut, narrow contract.** Apple documents
+`SMAppService.statusForLegacyPlist(at:)` for an app checking a legacy helper
+from its earlier releases. Cross-app queries are useful observed behavior, not
+a supported inventory contract. Use them only as an optional signal and treat
+`.notFound` as unresolved. There is deliberately no single "source of truth"
+for all state axes.
 
 ---
 
 ## 4. System vs. third-party: telling needed from unneeded
 
 Users must never be nudged toward disabling something that bricks their Mac.
-BootCaptain classifies every item with **three independent signals** and
-requires agreement before applying the "macOS system" badge:
+Classification starts by building the launch recipe and validating every
+resolved executable architecture with `SecStaticCodeCheckValidityWithErrors`
+and the applicable explicit requirement. Collect signer, identifier, Team ID,
+platform status, and CDHash per slice; cross-slice identity disagreement is a
+conflict that fails closed. `SecCodeCopySigningInformation` returns metadata and
+can return partial information for invalid code; it is not itself a validity
+check ([S-01 and S-02](EVIDENCE.md#trust-attribution-and-privileged-actions)).
 
-1. **Signature / platform binary.** `kSecCodeInfoPlatformIdentifier` present and
-   nonzero (via `SecCodeCopySigningInformation`) means an OS-shipped platform
-   binary. Corroborate with the requirement check
-   `SecRequirementCreateWithString("anchor apple", …)` — this passes **only** for
-   Apple OS software (as opposed to `"anchor apple generic"`, which also passes
-   App Store and Developer ID).
-2. **Location.** A plist on the sealed Signed System Volume (`/System/Library/…`)
-   shipped with the OS and cannot have been modified. Caveat: Apple also
-   installs under `/Library/Apple/System/Library/…` (XProtect Remediator,
-   Rosetta) and inside cryptexes — so "not under /System" ≠ third-party.
-3. **Label prefix `com.apple.*`.** Necessary-looking but **spoofable and never
-   sufficient**. A `com.apple.*` label whose executable is not Apple-signed is a
-   high-priority red flag (classic adware pattern).
+After validation, BootCaptain combines independent signals:
 
-**Rule:** *Apple system* = passes `anchor apple` (or platform identifier) **and**
-lives on the SSV or under `/Library/Apple`. Everything else is third-party,
-graded on a trust ladder (broken signature → ad-hoc → unsigned → Developer ID
-unnotarized → Developer ID notarized → App Store → Apple platform).
+1. **Signature.** `anchor apple` identifies valid Apple-signed code.
+   `kSecCodeInfoPlatformIdentifier` is corroborating metadata indicating code
+   signed as part of an OS release, not a substitute for validity checking.
+   `anchor apple generic` also covers non-OS Apple distribution chains and must
+   not be used as an "Apple system" test.
+2. **Protected location.** A source/executable on the sealed Signed System
+   Volume, in a cryptex, or in an Apple-controlled `/Library/Apple` location is
+   strong system provenance. Location alone does not prove the target reached
+   through an interpreter or symlink.
+3. **Management.** An organization-managed source is neither Apple system code
+   nor user-owned software. It gets a distinct read-only classification.
+4. **Label.** `com.apple.*` is spoofable and never sufficient. A conflicting
+   label, signature, or location produces an unknown/red-flag result rather
+   than choosing whichever signal looks friendliest.
 
-Apple-system rows are **read-only by default** in the UI (behind a "show system
-items" toggle) for two reasons: safety, and because `launchctl` overrides on
-SIP-protected services frequently don't stick anyway. This mirrors Apple's own
-System Settings, which refuses to deregister system items.
+**Safety rule:** BootCaptain never mutates Apple platform/system items or
+organization-managed items. This is independent of whether SIP happens to
+reject a particular `launchctl` operation. Other code is graded by validated
+signature type and contextual Gatekeeper assessment; "notarized" and "safe to
+disable" are different questions.
 
 **The interpreter trap.** Items whose `Program` is `/bin/bash`,
 `/usr/bin/python3`, or `/usr/bin/osascript` carry Apple's signature on the
-*interpreter*, not the payload — System Settings itself mislabels these as
+*interpreter*, not the payload. System Settings may display these as
 "unidentified developer." BootCaptain must classify "Apple-signed interpreter +
 third-party script argument" as its own category and attribute trust from the
 script in `ProgramArguments`, because it is a favorite adware shape.
+
+**Build the launch recipe before applying that rule.** When `Program` exists it
+is the executable and `ProgramArguments` remains argv; do not mistake its first
+element for another executable. Without `Program`, resolve
+`ProgramArguments[0]` using launchd's documented `_PATH_STDPATH` behavior.
+Resolve `BundleProgram` relative to the owning app. Preserve `EnableGlobbing`,
+`RootDirectory`, `WorkingDirectory`, environment, shebang, `/usr/bin/env`, and
+wrapper/interpreter effects. Parse only explicitly supported interpreter
+grammars. Shell command strings, inline-code modes, dynamic wrappers, and
+unresolved exec chains remain unknown and fail closed for mutation.
 
 ---
 
 ## 5. Attribution: associating an item with a recognizable app
 
-This is the "show me it belongs to Dropbox" promise. Resolve identity through an
-ordered pipeline, stopping at the first high-confidence hit:
+This is the "show me it belongs to Dropbox" promise. Collect **all** available
+signals, score vendor and product identity separately, and surface conflicts;
+do not stop at the first plausible hit:
 
-1. **Inside/points into an installed `.app`** → that bundle (high). Walk parents
-   to the outermost `.app`, then `Bundle(url:)` for name and icon.
-2. **BTM record** — `developerName` + `teamIdentifier` + `associatedBundleIdentifiers`
-   (high; the developer name persists even after the app is deleted).
-3. **`AssociatedBundleIdentifiers`** in the plist, **Team-ID-verified** against
-   the target app (high). The system honors this key only when the item's
-   signing Team ID matches the referenced app's — so BootCaptain must replicate
-   that cross-check rather than trust a self-declared claim.
-4. **Code signature Team ID** → vendor via the leaf certificate organization
-   (`SecCodeCopySigningInformation` / `codesign -dv --verbose=4`). **Team ID is
-   the primary grouping key** — cryptographically bound, survives renames,
-   shared across a vendor's app + agents + daemons + helpers.
-5. **Apple's own attribution table** — `/System/Library/PrivateFrameworks/
-   BackgroundTaskManagement.framework/Versions/A/Resources/attributions.plist`
-   (~4,000 entries mapping helper executables/labels to products and Team IDs).
-   This is the same data System Settings uses to pretty-name items — a **free,
-   local catalog seed** (parse read-only; it's a private-framework resource, so
-   bundle a snapshot as fallback).
-6. **Package receipt** — `pkgutil --file-info <plist path>` returns the receipt
-   package ID that installed the exact file, yielding vendor attribution even
-   for unsigned binaries or deleted apps.
-7. **Curated catalog** keyed by (Team ID, label-prefix) — adds plain-language
-   descriptions and safe-to-disable ratings on top of identity.
-8. **Label reverse-DNS prefix** — display only as a hint, never as ground truth.
-9. **Nothing** → "Unknown item from `<Developer Name>`", amber, show the raw
-   facts honestly.
+1. **Canonical bundle containment or executable target.** Walk to the outermost
+   installed `.app`, record all copies, and validate the current code. This is
+   strong present-day product evidence.
+2. **Validated code signature.** Team ID is a strong developer-account grouping
+   key, but one Team ID can ship many unrelated products and can change after an
+   acquisition or transfer.
+3. **BTM record and `AssociatedBundleIdentifiers`.** These are useful
+   association claims. Verify referenced apps and matching valid Team IDs where
+   possible; stale BTM history or a self-declared bundle ID cannot establish
+   current trust.
+4. **Apple's local attribution table.** Read the host's
+   `/System/Library/PrivateFrameworks/BackgroundTaskManagement.framework/Versions/A/Resources/attributions.plist`
+   opportunistically as
+   version-dependent display evidence. Do not assume a fixed schema or count,
+   and do not redistribute a snapshot without explicit licensing clearance.
+5. **Package receipt.** `pkgutil --file-info <path>` means a receipt records that
+   path; it does not prove that the current bytes were installed by or remain
+   owned by that package.
+6. **Independently curated catalog.** Team ID plus constrained label/path facts
+   can add plain-language purpose and consequence text, but catalog data never
+   authorizes a privileged action.
+7. **Reverse-DNS label or historical developer name.** Display as a low-confidence
+   hint only. Otherwise show "Unknown" and the raw evidence honestly.
 
 **Display.** Names and icons come from
 `NSWorkspace.shared.urlsForApplications(withBundleIdentifier:)` (macOS 12+,
-returns all copies — flags the ran-from-DMG duplicate), `Bundle`'s
+returns all copies - flags a launched-from-DMG duplicate), `Bundle`'s
 `localizedInfoDictionary`, and `NSWorkspace.shared.icon(forFile:)`, with
-`mdfind "kMDItemCFBundleIdentifier == '…'"` as stale-LaunchServices insurance.
-When the owning app is gone, fall back through BTM's captured developer name →
-`attributions.plist` → leftover-binary signature → pkg receipt → catalog →
-generic icon + explicit **orphaned** badge.
+`mdfind "kMDItemCFBundleIdentifier == '<bundle-id>'"` as stale-LaunchServices
+insurance.
+When the owning app is gone, retain BTM history, the local attribution table,
+leftover-binary signature, receipts, and catalog matches with individual
+provenance. Use **possibly orphaned** until mounted-volume and repeated-scan
+checks establish absence.
 
-**Curated catalog.** Ship a signed, updatable data file (keyed by Team ID +
-label-prefix regex): vendor, product, one-sentence purpose, category
-(updater/sync/backup/VPN/security/peripheral/menu-bar/telemetry),
-safe-to-disable rating, and a consequence sentence ("stops automatic Chrome
-updates"). Seed identity from `attributions.plist` and the well-known helper
-labels (`com.google.keystone.*`, `com.microsoft.update.agent`,
-`com.adobe.ARMDC.*`, `com.docker.vmnetd`, …); layer BootCaptain's plain-language
-explanations on top. This is the descriptive layer no free tool provides today.
+**Curated catalog.** Ship independently researched facts: vendor, product,
+purpose, category, consequence text, source URL, review date, and supported OS
+range. Updates need a threat model, not merely a signature: version/expiry and
+rollback protection, offline root and rotatable signing keys, schema/size
+limits, bounded non-backtracking matching, atomic last-known-good installation,
+and a built-in immutable safety policy. Treat a TUF-compatible design as the
+baseline ([C-01](EVIDENCE.md#catalog-and-project-policy)). Never seed a
+distributable file by copying Apple's private resource without licensing
+approval.
 
-**Show WHY an item runs.** Turn plist keys into a human chip: "Starts at
-login/boot" (`RunAtLoad`), "Kept running permanently" (`KeepAlive`), "Scheduled
-every N minutes" (`StartInterval`), "When files change in …" (`WatchPaths`),
-"On demand — only when an app asks" (`MachServices`/`Sockets`). The last one is
-critical UX: on-demand items should not be presented as login-time savings.
+**Show WHY an item runs.** Turn each trigger into a chip: "Starts when loaded"
+(`RunAtLoad` or implied by `KeepAlive`), "Kept running" (`KeepAlive == true`),
+"Kept alive while/when ..." (`KeepAlive` dictionary), "Scheduled every N
+minutes" (`StartInterval`), "When files change ..." (`WatchPaths`), and "On
+demand - only when a client asks" (`MachServices`/`Sockets` without speculative
+triggers). On-demand registration is not login-time process execution.
 
 ---
 
@@ -365,268 +418,344 @@ critical UX: on-demand items should not be presented as login-time savings.
 
 ### 6.1 Per-type disable story
 
-- **User agents (`~/Library/LaunchAgents`)** — no elevation needed:
-  `launchctl disable gui/$UID/<label>` (persists in
-  `/var/db/com.apple.xpc.launchd/disabled.<uid>.plist`) **+** `launchctl bootout
-  gui/$UID/<label>` (stops the running instance now). Undo with `enable` +
-  `bootstrap`. Agents with `LimitLoadToSessionType = Background` live in the
-  `user/$UID` domain rather than `gui/$UID`, so to be thorough disable in
-  **both** domains.
-- **System daemons/agents (`/Library/…`)** — same verbs with `sudo` and the
-  `system/` domain. `/Library/LaunchAgents` items load into *every* user's gui
-  domain, so present "disable for me" (per-user override) vs "disable for
-  everyone" (move the plist, root) honestly.
-- **Ventura+ "Allow in the Background" (BTM) items** — **no public or reliable
-  private API** to flip another app's toggle. Effective disabling of file-based
-  launchd items goes through the launchd layer (above); items registered from
-  inside an app bundle (SMAppService) are **System-Settings-only** →
-  deep-link with `SMAppService.openSystemSettingsLoginItems()` or the URL
-  `x-apple.systempreferences:com.apple.LoginItems-Settings.extension`. Never
-  edit a plist inside another app's bundle — it breaks the signature and trips
-  App Management TCC.
-- **Classic "Open at Login" entries** — AppleScript via System Events still
-  works (`tell application "System Events" to delete login item "X"`), gated by
-  the Automation TCC prompt. This is the one quasi-supported mutation path for
-  other apps' items.
-- **System extensions** — never programmatically; `systemextensionsctl uninstall`
-  requires **SIP disabled** (confirmed by Apple DTS on 15.2; the "near future"
-  message has been there since 2020). Enumerate, attribute, and route users to
-  app-deactivation / drag-to-Trash / the Settings pane.
-- **cron** — comment out lines with a BootCaptain marker and rewrite via
-  `crontab`; never `crontab -r` (destroys the whole tab). On macOS 15+ check the
-  new **"Legacy Background Tasks"** toggle, which (per an Apple engineer) gates
-  whether cron runs at all.
+Apply managed/SMAppService policy before generic launchd policy. A bundled or
+BTM-managed item does not fall through to direct launchd mutation unless that
+specific override behavior has been separately qualified and disclosed.
 
-**Preferred mechanism ranking:** override DB (`disable` + `bootout`) is primary
-— it's label-keyed so it survives an updater recreating the plist (the
-whack-a-mole defense), reversible with one command, and survives OS updates.
-"Move to quarantine" is the stronger opt-in. **Never** edit a vendor plist's
-`Disabled` key in place (updaters overwrite it and the override DB supersedes it
-anyway), and never delete as the default action.
+- **LaunchAgents.** Determine the domain in which the service is actually
+  registered; never disable both `gui/<uid>` and `user/<uid>` speculatively.
+  For that domain, `launchctl disable <domain>/<label>` persists the launchd
+  override across boots. Record loaded/running state, exact domain/path/file
+  identity, and the observed override as absent/default, explicit-enabled,
+  disabled, or unknown. Unknown pre-state blocks mutation because no safe
+  inverse can be established. `launchctl bootout <domain>/<label>` is a separate,
+  explicit operation that unloads and can terminate current work; it is not a
+  harmless part of disabling. `/Library/LaunchAgents` are still per-user
+  services; there is no supported single override for every current and future
+  user.
+- **LaunchDaemons.** `/Library/LaunchDaemons` use the `system` domain and require
+  privileged mutation. Apply the same pre-state, exact-target, separate
+  disable/bootout, and journal-driven inverse rules. A system-domain job can
+  still run as a non-root user specified by its plist.
+- **BTM / SMAppService items owned by another app.** There is no public API for
+  BootCaptain to change another app's registration or background-activity
+  authorization. Use `SMAppService.openSystemSettingsLoginItems()` and explain
+  the owning app's supported off-switch. Do not use an undocumented Settings
+  URL or edit another signed app bundle.
+- **Classic Open at Login entries.** Prefer a supported/manual System Settings
+  route. If System Events automation is retained, include
+  `NSAppleEventsUsageDescription` and the Apple Events entitlement, resolve by
+  path rather than ambiguous display name, preview the exact record, and fall
+  back to manual instructions when Automation is denied.
+- **Extensions, drivers, HAL, profiles, and managed tasks.** Enumerate and
+  attribute, then route to the owning app, System Settings, vendor uninstaller,
+  or administrator. Do not invoke developer-only reset tools, rewrite
+  authorization policy, remove managed profiles, or delete nested signed code.
+- **cron.** Export with `crontab -l` for the current user or
+  `crontab -u <user> -l` as root for another user, edit one parsed entry, then
+  reinstall the complete tab with `crontab <file>` or
+  `crontab -u <user> <file>`. Preserve comments/environment and verify a parse
+  round-trip. `/etc/crontab` has a
+  different format with a user field and requires its own parser and
+  descriptor-safe privileged path; never pass it to `crontab` and never use
+  `crontab -r`. Treat the macOS 15 Legacy Background Tasks interaction as
+  observed, build-specific behavior until the matrix establishes scope.
+- **at / atrun.** Read-only. Removing a queued job is destructive, recreation
+  changes identity, and a deadline can elapse while it is absent, so BootCaptain
+  offers no job or scheduler mutation.
+
+There are three action classes: **supported behaviorally reversible mutation**,
+**guided vendor/Settings/admin action**, and **read-only evidence**. A new mechanism does
+not enter the first class until its pre-state capture, mutation, verification,
+behavioral restoration, unavoidable residue, update, and interrupted-operation
+cases pass on every supported OS family.
+
+For eligible legacy launchd services, `disable` is preferred to editing the
+vendor plist's `Disabled` key. `enable` restores loadability and `bootstrap`
+restores a definition that BootCaptain booted out only when its source identity
+still matches. launchctl exposes no supported operation to remove an override
+and restore an initially absent/default record; that case is behaviorally
+reversible but not exact configuration restoration and must disclose the
+residue. Updater label changes and OS-upgrade behavior also require tests.
+Moving a source file to a disable vault is a stronger, separately confirmed
+action, not a default. Deletion is never the default
+([L-06 and L-07](EVIDENCE.md#launchd-and-service-management)).
 
 ### 6.2 What must never be touched
 
-Everything under `/System/Library/Launch*` is sealed and read-only. But
-`launchctl disable system/com.apple.*` **succeeds** for many Apple services
-(the override DB is on the writable Data volume), and SIP only blocks runtime
-ops on a *subset* — so SIP is **not** a sufficient guard. BootCaptain ships a
-curated, updatable **deny-list** of critical services that it hard-refuses to
-touch even in a power-user mode, including at minimum: `opendirectoryd`,
-`securityd`, `trustd`, `tccd`, `WindowServer`, `loginwindow`, `logd`,
-`cfprefsd`, `configd`, `powerd`, `diskarbitrationd`, `coreservicesd`,
-`launchservicesd`, `mDNSResponder`, `UserEventAgent`, `fseventsd`, `watchdogd`,
-`apsd`, `mobile.softwareupdated`.
+BootCaptain hard-refuses to mutate any source or executable that is valid Apple
+platform/system code, resides on the SSV or in a cryptex/Apple-controlled
+system location, or is organization-managed. Unknown or conflicting provenance
+also fails closed. This policy does not depend on SIP or a particular
+`launchctl` error. A built-in critical-label deny-list remains useful defense in
+depth, but it cannot be the primary boundary and remote catalog data cannot
+weaken it.
 
 ### 6.3 Reversibility and recovery
 
-- **Staged (two-phase) disable:** `bootout` first ("try without it until
-  reboot"), persist `disable` only after the user confirms things still work.
-  Confirm that the action took by reading the **launchd** layer
-  (`launchctl print-disabled`, `launchctl print`), *not* by re-reading BTM/System
-  Settings — that view is eventually-consistent (§2.2) and can lag up to a day,
-  so an immediate BTM re-read will produce false "it didn't take" mismatches.
-- **Rescue manifest:** write a plain-text log of every change with exact undo
-  commands to a predictable path (e.g. `/Users/Shared/BootCaptain/rescue.txt`),
-  so a technician in Recovery can revert without BootCaptain running.
-- **Quarantine, not delete:** move plists to a timestamped folder with a JSON
-  manifest (`original_path`, `sha256`, `label`, `domain`, `method`, `date`,
-  attribution); archive a copy even on explicit "delete permanently."
-- **Snapshots:** export/restore full enable-disable state as a JSON diff — the
-  basis of the undo stack.
-- **Recovery paths, worst case:** Safe Mode (boots without third-party launchd
-  jobs, enough to run `launchctl enable`); Recovery OS (its `launchctl` can't
-  target the installed system's domains — the working fix is deleting/editing
-  `/Volumes/<Data>/private/var/db/com.apple.xpc.launchd/disabled*.plist`
-  directly); `sudo sfltool resetbtm` (dump first, restart after) to rebuild
-  corrupt BTM state.
+- **Staged disable.** Preview persistent `disable` separately from optional
+  `bootout`, including the consequence of terminating current work. If the user
+  chooses an unload trial, provide immediate bootstrap restoration subject to
+  source-identity validation. Verify the targeted launchd override/domain and
+  show BTM authorization as an independent observation, not a delayed mirror.
+- **Authoritative journal.** Serialize mutations under a helper-held lock. Write
+  a unique immutable **prepared** record containing verified preconditions and
+  idempotent undo data, then durably flush the record and directory entry before
+  mutation. Reopen and verify actual state, then durably mark **committed**;
+  mark **aborted** only after proving no effect, otherwise mark
+  **indeterminate**. On startup, reconcile every prepared or indeterminate
+  transaction against current descriptor-derived state before allowing recovery
+  or undo; never blindly repeat or reverse it. Mutation,
+  verification, recovery, and undo must be idempotent, and power-loss claims use
+  `F_FULLFSYNC` where supported or are explicitly downgraded. Store records under
+  `/Library/Application Support/BootCaptain`, owned by `root:wheel` with
+  restrictive permissions; labels and paths are inert data, never commands. A
+  `/Users/Shared` export is nonauthoritative
+  ([S-07](EVIDENCE.md#trust-attribution-and-privileged-actions)).
+- **Disable vault.** If a qualified action moves a file, use a pre-created,
+  root-owned same-volume vault and an exclusive descriptor-relative rename that
+  cannot overwrite an existing destination. Preserve content, ownership, mode,
+  flags, ACLs, extended attributes, file identity, hash, domain, and attribution.
+  Do not call this quarantine, which has a separate macOS meaning.
+- **Snapshots.** Export enable/disable observations and BootCaptain changes as
+  a versioned JSON diff. Restoration only replays operations BootCaptain
+  journaled; it does not overwrite unrelated launchd or BTM state.
+- **Recovery.** Safe Mode suppresses certain non-required startup software but
+  is not a guarantee that every third-party job is absent. Restore moved files
+  from the vault, then boot the installed OS/Safe Mode and replay only the exact
+  inverse recorded in the journal: `enable` only for BootCaptain's `disable`,
+  and `bootstrap` only for a BootCaptain `bootout` of a previously registered
+  service whose source identity still matches. Never delete or edit launchd's
+  private `disabled*.plist` store. `sfltool resetbtm` is a destructive, global
+  expert action for test/recovery, not orphan cleanup; a dump is diagnostic
+  rather than a documented restore format.
 
 **The whack-a-mole reality.** Chrome/Keystone, Dropbox, Adobe, Microsoft
 AutoUpdate, Zoom, and corporate agents re-register their helpers on next
-launch. Override-DB disable wins most rounds (recreated same-label plists stay
-disabled). When a vendor rotates the label, tell the user plainly: *"Chrome
+launch. A same-domain, same-label override commonly survives plist recreation,
+but that behavior is not a substitute for testing. When a vendor rotates the
+label, tell the user plainly: *"Chrome
 re-added Google Keystone under a new name. The durable fix is inside the app
-itself — [open its settings]."* Maintain a small map of known items → the
+itself - [open its settings]."* Maintain a small map of known items to the
 vendor's own off-switch and present that as the recommended fix, with
 BootCaptain's disable as the enforcement backstop.
 
 ### 6.4 Privileges, permissions, and distribution
 
-- **Privileged helper:** the modern pattern is BootCaptain's own daemon embedded
-  at `BootCaptain.app/Contents/Library/LaunchDaemons/…` (using `BundleProgram`
-  + `AssociatedBundleIdentifiers` + `MachServices`), registered via
-  `SMAppService.daemon(plistName:).register()` (user approves once, admin auth).
-  Harden the XPC channel with `NSXPCConnection.setCodeSigningRequirement(_:)`
-  pinning BootCaptain's Team ID; never trust PID-based checks.
-- **TCC:** the current user's own `~/Library/LaunchAgents` needs nothing;
-  `/Library` and `/System` launchd dirs are world-readable. **Full Disk Access**
-  is needed for other users' agents, the BTM store, crontabs, and saved
-  application state. FDA has no prompt API — deep-link to Privacy & Security and
-  detect the grant by test-reading a protected file. Crucially, a LaunchDaemon
-  helper is **its own** TCC-responsible process and needs its own FDA grant — so
-  put TCC-protected *reads* in the app process and keep the root helper to
-  non-TCC operations (`launchctl system/…`, file moves in `/Library`).
-  **App Management** TCC is only triggered by modifying another app's bundle —
-  design that out entirely.
+- **Privileged helper layout and lifecycle.** Put the daemon plist in
+  `BootCaptain.app/Contents/Library/LaunchDaemons` and the executable in an
+  appropriate signed code location such as `Contents/Resources`; reference it
+  with `BundleProgram`, expose a narrowly scoped Mach service, and register via
+  `SMAppService.daemon(plistName:)`. Registration requests approval; check
+  `status` after every attempt. Keep the no-`KeepAlive` service registered and
+  let it exit when idle. Offer explicit **Uninstall helper** via `unregister()`;
+  do not unregister on every app quit or depend on approval surviving
+  re-registration.
+- **Mutual authentication and authorization.** On every supported release,
+  configure exact anchored requirements containing the expected bundle
+  identifier and Team ID on both outgoing `NSXPCConnection` and incoming
+  `NSXPCListener` before either side resumes or accepts messages. Team ID alone
+  is too broad. Retain the immutable audit token for caller UID/audit-session
+  checks and defense-in-depth validation, not as a compatibility fallback. The
+  helper also checks a BootCaptain-specific Authorization Services right and
+  operation scope each time; registration is not authorization for arbitrary
+  future root actions.
+- **No confused deputy.** The helper accepts typed operations and opaque item
+  identifiers, never shell fragments, generic `launchctl` verbs, arbitrary
+  source/destination paths, or log predicates. It independently reopens and
+  validates each target immediately before mutation: canonical allowlisted
+  root, expected label/domain, regular-file type, owner/mode/ACL/link count,
+  stable device/inode, current valid signature, and unmanaged/non-Apple status.
+  Refuse the operation if the caller can write any security-relevant source,
+  executable, or ancestor through mode or ACL. Open fixed roots as directory
+  descriptors and resolve beneath them with `openat`, no-follow/beneath flags
+  where available, or an equivalent descriptor walk; `O_NOFOLLOW` on only the
+  final component is insufficient. Keep descriptors open through validation,
+  reject unsafe hard links and destination collisions, use exclusive
+  descriptor-relative same-volume renames, bound output, and verify afterward
+  ([S-03 and S-04](EVIDENCE.md#trust-attribution-and-privileged-actions)).
+- **TCC and permissions.** Maintain an OS-build matrix per collector/action for
+  standard/admin users, root, FDA, Automation, Accessibility, and App
+  Management. Root does not imply FDA and an FDA grant does not bypass BSD
+  ownership. Perform current-user TCC reads in the app where possible and keep
+  the helper to demonstrated root-only operations; anyone can query the system
+  launchd domain. If an operation needs both root and TCC, test which binary is
+  responsible or omit the collector rather than assuming inheritance.
 - **Distribution:** Developer ID + hardened runtime + **notarization** for the
   app and every embedded executable. The full app is **infeasible on the Mac
-  App Store** (the sandbox forbids root helpers, cross-domain `launchctl`, and
-  `/var/db` reads); only a heavily degraded read-only viewer could pass, if at
-  all. Real distribution is Developer ID direct.
-- **The irony guard.** BootCaptain should default to **zero persistent
-  components**: enumerate in-process, batch privileged work into one-shot
-  elevations, register nothing. If a user opts into a frictionless helper,
-  register it **on-demand only** (no `KeepAlive`), list it *first* in
-  BootCaptain's own UI with a one-click "Uninstall helper" (`unregister()`), and
-  say plainly what it owns. The "install → operate → unregister at quit"
-  ephemeral pattern is viable because BTM remembers the approval across
-  re-registration.
+  App Store** as designed because App Review Guidelines 2.4.5 and 2.5.2 require
+  sandboxing, prohibit root escalation, and constrain broad filesystem access.
+  `SMAppService` itself is not categorically forbidden. A reduced read-only
+  edition would still require actual App Review. Real distribution for the full
+  product is Developer ID direct.
+- **The irony guard.** Read-only use registers nothing. Register the on-demand
+  helper only on first privileged action, show it prominently in BootCaptain's
+  own inventory, explain every right it has, and provide explicit removal.
 
 ---
 
-## 7. Diagnosing startup failures — the founding feature
+## 7. Diagnosing startup failures
 
-This is the reason BootCaptain exists, and it is the capability **no consumer
-tool offers**. The key insight: BootCaptain cannot map a dialog to an item by
-intercepting the dialog — those are drawn by the failing programs themselves.
-It must reconstruct the failure story from the log, launchctl, and crash
-reports, then optionally match dialogs by owning **pid**.
+This is the founding use case. BootCaptain builds a best-effort evidence
+timeline; it does not promise a complete historical trace. A dialog may be
+presented by the launched item, an interpreter/wrapper or child, or an OS broker.
+Accessibility can identify the presenting process, not automatically the
+startup item that caused it. Keep **Presented by** separate from **Likely
+triggered by**, each with evidence and confidence.
 
-**Who shows which dialog:**
-
-- **launchd** — never shows UI; a missing executable produces one unified-log
-  line (`Service could not initialize …` with an errno; `0x2`/ENOENT = missing
-  binary).
-- **BTM / orphaned login items** — silently not launched; the row lingers as a
-  "ghost" in System Settings (and can re-enable itself); the blunt fix is
-  `sfltool resetbtm`.
-- **loginwindow + Launch Services** — the generic `The application "X" can't be
-  opened.` (LS errors `-10810`, `-600`) naming the *item*, not the source.
-- **AppleScript applets** — the classic *"Where is X?"* file-picker when an
-  embedded alias can't resolve.
-- **Apps from ejected DMGs** — path under `/Volumes/<gone>` fails silently
-  (launchd) or as a bookmark-resolution failure (BTM).
-- **The launched program itself** — arbitrary text ("Could not open file",
-  missing-resource, license nags). **This is the majority of vague dialogs.**
+Common hypotheses worth testing include a missing launchd executable, an
+unresolved classic-login-item bookmark, an app on an unavailable volume, an
+AppleScript alias prompt, a Gatekeeper/code-signing denial, a dyld failure, or
+arbitrary UI from the launched program. Exact dialog text and error-number
+mappings are release-specific; do not encode anecdotes as universal rules. A
+lingering BTM row is registration evidence, not proof of failure, and
+`sfltool resetbtm` is not routine remediation.
 
 **Evidence sources:**
 
-1. **Unified log.** Shell out to `/usr/bin/log show --last boot --style ndjson`
-   (parse NDJSON) with tight predicates on `com.apple.xpc.launchd` (spawn/exit/
-   throttle), `com.apple.loginwindow`, `com.apple.backgroundtaskmanagement`,
-   `com.apple.syspolicy`/`CoreServicesUIAgent` (Gatekeeper). Access gotchas:
-   admin users can read the log, **standard users get silently empty output**
-   (detect "zero entries where there must be some" as a permissions failure,
-   not a healthy boot); `OSLogStore.local()` is blocked for third parties by the
-   `com.apple.logging.local-store` entitlement — route standard-user installs
-   through the privileged helper. Some paths are redacted `<private>` unless an
-   opt-in Enable-Private-Data logging profile is installed (partial efficacy —
-   "sensitive"-level values stay masked). Log text is version-fragile — ship a
-   per-OS matcher table and fail soft.
-2. **`launchctl print`.** The `services` block gives a one-call health sweep
-   (`PID  last-exit-status  label`; negative = killed by that signal). Per-service
-   `runs` (spawn count — high minutes after login = crash loop), `last exit
-   code`, and `path`. **Exit 78 = EX_CONFIG** (launchd rejected the job's config
-   or couldn't spawn the program — and it will **not** respawn even under
-   `KeepAlive`, so "runs stuck at 1 + status 78" is its own verdict, distinct
-   from a throttled crash loop). Crash loops show `Service only ran for N
-   seconds. Pushing respawn out by 10 seconds.` (10s = default `ThrottleInterval`).
-3. **Crash reports.** `~/Library/Logs/DiagnosticReports` (user; note the path is
-   under `Logs/`) and `/Library/Logs/DiagnosticReports` (admin-readable, so the
-   app process can read it without the root helper). Since Monterey
-   these are `.ips` files = **two concatenated JSON documents** (split on the
-   first newline). Join `procPath` / `parentPid == 1` / `captureTime` to
-   enumerated items; the `termination` namespace gives the plain-English reason
-   (`DYLD` carries "Library not loaded: /path/…"; `CODESIGNING` explains
-   signature kills).
-4. **Static per-item health checks (no logs needed):** `plutil -lint`;
-   `Program`/`ProgramArguments[0]` exists and is executable; Mach-O arch vs
-   Rosetta (EBADARCH); `otool -L` dyld-closure check (predicts "Library not
-   loaded"); `codesign --verify`; quarantine xattr; stale `/Users/<olduser>` or
-   `/Volumes/<gone>` paths; bookmark staleness via `URL(resolvingBookmarkData:…
-   [.withoutUI, .withoutMounting])`.
+1. **Unified log.** Query a bounded boot/login interval with narrow predicates
+   for launchd, loginwindow, BTM, Launch Services, and security policy. `--last
+   boot` begins at boot, not the current GUI login, and can include several
+   logins, fast-user switches, sleeps, and wakes. Capture command status and
+   stderr; request info/debug levels when useful, while recognizing those
+   records might never have been persisted. Redaction, retention, and access
+   vary. Zero matches means no accessible match, not success or a reliable
+   permissions test. Report query execution as succeeded/failed separately from
+   historical evidence coverage, which is partial or unavailable; record the
+   requested interval, accessible-store bounds, levels, loss records, redaction,
+   and permissions. Log strings use build-tested matchers and fail soft.
+2. **launchd diagnostics.** `launchctl print` can expose current state, origin,
+   counters, and last status, but its output is explicitly not API. Report raw
+   observations such as "last reported status 78" or "14 runs". Exit 78 is the
+   child's conventional `EX_CONFIG`, not proof that launchd rejected the plist;
+   a high run count can be legitimate demand. Call timestamped starts/exits
+   "repeated execution observed." Diagnose a restart loop only when events are
+   temporally linked to a configured restart condition and unexpected
+   termination; reserve "crash loop" for repeated crash signals or correlated
+   reports. Missing fields are unavailable, not negative history.
+3. **Crash and incident reports.** Inspect user and system DiagnosticReports
+   only where permissions allow. Detect the `.ips` report/`bug_type` before
+   applying Apple's documented metadata-line-plus-JSON crash parser; not every
+   `.ips` file has one universal shape. Process path, PID/parent, timestamp, and
+   termination data are correlation signals. `parentPid == 1` can also be a
+   reparented orphan, reports can be delayed/absent/redacted, and no report means
+   unknown.
+4. **Static risk signals.** Plist syntax, executable existence/mode, interpreter
+   target, architecture slices, Rosetta availability, signature validity,
+   contextual Gatekeeper assessment, quarantine metadata, direct `otool -L`
+   dependencies, suspicious old-user/offline-volume paths, and no-UI/no-mount
+   bookmark resolution are useful facts. They do not reproduce launchd's UID,
+   domain, environment, TCC, transitive dyld closure, or runtime success. An
+   offline bookmark target is not necessarily stale.
+5. **Prospective observation.** Strong historical negatives require a monitor
+   that was already running. An optional future monitor records its start time,
+   authorization, dropped-event/gap indicators, and stop time so the UI never
+   presents an incomplete interval as complete
+   ([D-01 through D-06](EVIDENCE.md#diagnostics-and-observation)).
 
-**The flagship: a first-run "boot audit."** On first launch after login, run
-the log queries over `--last boot`, join with `launchctl print` counters and
-crash reports, and annotate **every enumerated item** with: *launched OK (pid,
-time) / failed (reason: missing binary, crash SIGSEGV, code-signing kill,
-config-rejected EX_CONFIG, throttled crash loop) / never attempted (disabled,
-session-gated)*. This directly answers "which of these threw that error at
-login," which is the whole point.
+**The flagship: boot/login evidence audit.** On first launch, correlate
+available evidence into the following safe states:
+
+| State | Meaning |
+| --- | --- |
+| Active now | A current process or service state was observed |
+| Execution observed | A timestamped launch/exec event was found; outcome is unknown |
+| Exit observed | An exit status or signal was observed and shown without automatic interpretation |
+| Failure evidence | A specific missing target, denied exec, crash, or qualified restart/crash loop was observed |
+| Not eligible at snapshot | Current configuration is disabled or session-ineligible; no historical claim |
+| Configured, not observed | The item exists but the available window contains no matching execution evidence |
+| Coverage incomplete | Permissions, retention, parser support, redaction, or monitor gaps prevent a conclusion |
+
+Only use **succeeded** when the item exposes an item-specific success signal.
+This model can answer "which item has evidence matching that failure?" without
+turning absence of telemetry into "never attempted."
+
+**Privacy boundary.** Unified logs, cross-user reports, Accessibility text,
+private-data logging, and Endpoint Security events can expose document paths,
+identifiers, message text, and secrets. Raw evidence remains local and
+short-lived, exports are redacted by default, query duration/output are bounded,
+and AX/ES collection is explicit and independently revocable. Installing a
+private-data logging profile is not a normal product requirement.
 
 ---
 
 ## 8. Out-of-the-box ideas, honestly rated
 
-- **First-run boot audit** *(feasible — flagship).* Described in §7. All inputs
-  are readable; the joins are BootCaptain's; only log-string matching is
-  fragile.
-- **Dialog attribution via Accessibility** *(feasible-hacky — the only real
-  path).* Poll the AX tree for dialog-ish windows, read the text, and — the key
-  move — take the **owning pid** and walk pid → `procPath` → item. The pid, not
-  the text, is the attribution. Needs Accessibility TCC; the monitor is itself a
-  login item with no ordering guarantee, so coverage is best-effort. Prefer AX
-  over screenshots (which need Screen Recording and, on Sequoia, periodic
-  re-consent).
-- **Exec-ability probe** *(feasible-hacky).* `posix_spawn` with
-  `POSIX_SPAWN_START_SUSPENDED` then `SIGKILL` before resume — validates
-  existence, architecture, and exec-time code-signing without running user code.
-  True "dry-run replay" of items is **not feasible safely** (launching runs
-  arbitrary side effects).
-- **Per-item login-time impact** *(estimate only — say so).* No public per-item
+- **First-run evidence audit** *(feasible, best-effort flagship).* Described in
+  §7. Its value comes from concrete positive evidence and transparent gaps, not
+  from pretending every input is readable or complete.
+- **Dialog presenter via Accessibility** *(feasible, opt-in, privacy-sensitive).*
+  AX can return a window's owning PID. Map that to a presenter path; infer an
+  originating startup item only when process ancestry, identity, and timing
+  support it. The monitor has no ordering guarantee and may start after the
+  dialog, so retain an unknown outcome.
+- **Executable-image preflight** *(narrow, opt-in).* A suspended `posix_spawn`
+  can test whether the kernel admits an executable in BootCaptain's context
+  without running its user-space entry point. It does not reproduce launchd's
+  UID/domain/environment/TCC, dyld initialization, or Launch Services and still
+  creates audit/security telemetry. Run unprivileged with a timeout, `SIGKILL`,
+  `waitpid`, and explicit exclusion from BootCaptain's own launch evidence.
+  There is no safe general dry-run replay.
+- **Per-item login-time impact** *(estimate only; say so).* No public per-item
   accounting exists. Heuristics: spawn-timestamp timeline from launchd/
   RunningBoard log entries; `proc_pid_rusage()` polling of early CPU; coarse
   before/after A-B when a user disables items. Present as "estimated impact,"
   never ground truth.
-- **"What changed since last look" monitor** *(feasible in layers).* Layer 1
-  (supported, zero TCC): record `NSWorkspace` launch/terminate notifications.
-  Layer 2 (hacky): FSEvents/periodic `sfltool dumpbtm` diff on the launch
-  folders + BTM store. Layer 3 (entitlement-gated): Endpoint Security exec/BTM
-  events — perfect but needs Apple approval, a system extension, and non-MAS
-  distribution; a "Pro" feature, not v1.
+- **"What changed since last look" monitor** *(feasible in layers).* Workspace
+  notifications miss background-only/agent processes. FSEvents can coalesce or
+  drop events and should trigger a rescan, not serve as a ledger. Endpoint
+  Security BTM ADD/REMOVE events provide registration observations when
+  delivered and separate EXEC events provide execution observations; complete
+  delivery is not guaranteed. It needs Apple approval, user authorization, an
+  explicit privacy case, per-type/global sequence-gap recording, client
+  start/stop/restart bounds, and periodic full rescans. No history exists before
+  it starts.
 
 ---
 
 ## 9. Prior art and where BootCaptain fits
 
-The market is bifurcated. **Security/expert tools are exhaustive but don't help
-normal users act safely; consumer tools are actionable but shallow and
-poorly-attributed.** Nobody combines exhaustive coverage + app attribution +
-plain-language explanation + safe reversible disable + failure diagnosis. That
-gap is BootCaptain's slot.
+The product opportunity is a **market hypothesis**, not a defensible "first" or
+"nobody else" claim until current products are tested against the same fixture
+corpus. Vendor features and prices change, so this is a dated snapshot of the
+public pages reviewed on 2026-07-26, with versions shown where established. It
+must be product/version tested and refreshed before any positioning decision.
 
-| Tool | Coverage | Disable | UX | License / price |
-|---|---|---|---|---|
-| **System Settings › Login Items** | BTM only | toggle only (can't remove legacy/orphans) | consumer, but opaque names, no WHY, no diagnosis | built-in |
-| **KnockKnock** (Objective-See) | very broad (20 categories) | none (view-only) | hacker aesthetic, no hand-holding | GPL-3.0, free |
-| **EtreCheck** | broad | removes orphans/adware | diagnostic report, jargon | free + $19.99 one-time Power User |
-| **LaunchControl** (soma-zone) | launchd only, deep | yes (launchctl-level; reads BTM state) | power-user IDE, best failure diagnosis | ~$16.99 one-time |
-| **Lingon Pro** | launchd only | yes | friendlier editor, still assumes launchd literacy | $23.99 one-time |
-| **CleanMyMac**-class | shallow | deletes files → items "come back" | consumer, upsell-heavy | ~$40/yr sub |
-| **osquery / Fleet** | broad tables, **no BTM table**, `startup_items` broken on modern macOS | none | SQL/telemetry | Apache-2.0 OR GPL-2.0 |
+| Tool | Reviewed scope | Actions | Remaining BootCaptain hypothesis |
+| --- | --- | --- | --- |
+| **System Settings > Login Items & Extensions** | Open at Login items, app background activity, many extension families | Removes Open at Login records; changes supported toggles | No cross-source reconciliation, provenance view, or failure timeline |
+| **KnockKnock** (Objective-See) | Broad persistence taxonomy | Primarily inspection | Security-oriented presentation rather than mechanism-specific consumer undo |
+| **EtreCheck** | Broad diagnostic inventory and remediation guidance | Product-specific remediation | Report-oriented workflow rather than a live startup state model |
+| **LaunchControl 2.10.4** | Deep launchd inspection/editing, bundled/non-standard jobs, override and System Settings state, logs | Rich launchd actions | Expert launchd IDE rather than a cross-mechanism consumer explanation layer |
+| **Lingon / Lingon Pro 10** | Friendly scheduling plus launchd editing; login/background-item display in Pro | User tasks and launchd actions; some background rows view-only | Broader attribution, safety policy, and evidence correlation |
+| **CleanMyMac-class utilities** | Consumer cleanup/background-process workflows vary by release | Product-specific cleanup/toggles | Auditable provenance, exact consequences, and a first-class undo journal |
+| **osquery** | SQL inventory including modern BTM-backed `startup_items` after merged PR #8726 | Telemetry, not consumer mutation | Consumer UX, supported actions, and confidence-rated diagnosis |
 
-**Lessons baked into this plan:** KnockKnock's plugin-per-source architecture is
-the right completeness checklist (and its 20 categories ∪ osquery's tables ∪
-Csaba Fitzl's "Beyond the good ol' LaunchAgents" taxonomy is the superset to
-cover); EtreCheck proves orphan detection ("plist points at missing executable")
-is high-value and understandable; LaunchControl proves the launchd-override
-method is the only real third-party disable path on 13+ **and** that displaying
-BTM state alongside launchd state (as it has since v2.3) is the honest pattern;
-CleanMyMac's "it came back" one-star reviews prove **disable ≠ delete** and that
-trust is the scarce resource — no scare-numbers, no upsell, full undo.
+**Lessons baked into this plan:** collector-per-source decomposition is the right
+way to make coverage testable; orphan candidates are useful only when uncertainty
+is explicit; expert launchd tools demonstrate the value of showing definition,
+override, BTM, and live state separately; and durable trust requires exact
+consequences, no scare score, no destructive default, and an honest account of
+what can and cannot be restored exactly.
 
-**Licensing:** Objective-See code is GPL-3.0 (learn from it, re-implement, don't
-vendor into a proprietary app); osquery is dual Apache-2.0/GPL-2.0 (its table
-specs are legally reusable under Apache with attribution); blog taxonomies are
-copyrightable prose but the paths/techniques are unprotectable facts.
+**Licensing:** Objective-See projects are GPL-3.0 and osquery offers Apache-2.0
+or GPL-2.0 terms. Any proprietary implementation needs documented provenance,
+license compliance, and legal review before copying code, schemas, catalogs, or
+substantial prose; this plan is not a legal conclusion.
 
-**Positioning statement:** *the first consumer-friendly, exhaustive startup
-manager — shows everything that runs at boot/login (not just what BTM
-registered), names the app/vendor behind every item in recognizable terms,
-explains what it does in plain language, disables it reversibly through the
-mechanisms the OS actually honors, cleans up orphans, and tells you when a
-startup item is broken or slowing your login.* Suggested pricing: a free
-read-only audit mode plus a one-time ~$20–30 unlock, slotting between the
-expert one-time tools and the consumer subscriptions.
+The repository itself currently uses the **Unlicense**, which permits commercial
+redistribution by anyone. That does not prevent charging for builds or support,
+but it conflicts with assumptions of exclusive proprietary distribution. Decide
+between intentionally unrestricted, open-core/dual-license, and proprietary
+development before accepting substantial contributions or finalizing pricing.
+
+**Candidate positioning:** *a consumer-friendly startup evidence and control
+center with broad, published coverage: it associates opaque items with familiar
+apps, explains when and why they run, distinguishes observation from
+authorization and current state, offers only tested reversible actions, and
+shows concrete evidence behind startup failures.* A free read-only audit plus a
+one-time paid action tier is a hypothesis to validate after the repository's
+license and distribution model are decided.
 
 ---
 
@@ -634,147 +763,163 @@ expert one-time tools and the consumer subscriptions.
 
 **Two-process design (forced by the permission model):**
 
-- **BootCaptain.app** — SwiftUI, non-sandboxed, Developer ID + notarized. Owns
-  all enumeration that doesn't need root, the attribution engine, the curated
-  catalog, the UI, and TCC-protected reads (holds the Full Disk Access grant).
-- **com.bootcaptain.helper** — a privileged daemon registered via
-  `SMAppService.daemon`, on-demand (no `KeepAlive`), XPC-hardened with a
-  code-signing requirement. Does only what needs root: `launchctl` against
-  `system/…`, file moves in `/Library`, reading the BTM store and other users'
-  agents, system-domain `launchctl print` and `log show` for standard users.
-  Ephemeral by default (unregister at quit); persistent only if the user opts
-  in.
+- **BootCaptain.app** - SwiftUI, non-sandboxed, Developer ID + notarized. Owns
+  unprivileged/current-user collection, attribution, catalog, UI, evidence
+  redaction, and TCC-protected reads for permissions the user explicitly grants.
+  Full Disk Access is optional and collector-specific, not a blanket startup
+  requirement.
+- **com.bootcaptain.helper** - a demand-launched privileged daemon registered
+  via `SMAppService.daemon`, with no `KeepAlive`. It implements only the typed,
+  independently authorized root operations in §6.4. The Phase 1 read-only
+  product does not register it: collectors that truly require root report a
+  visible coverage gap. After a user enables actions, separately authorized
+  root-only reads may reuse it, but it does not exist merely to query the
+  readable system launchd domain and never exposes a general command runner or
+  filesystem proxy.
 
 **Core modules:**
 
-1. **Collectors** — one per source (launchd dirs, BTM, launchctl live state,
-   cron, periodic, system extensions, pluginkit, config profiles, loginwindow
-   relaunch, …), mirroring KnockKnock's plugin decomposition. Each returns raw
-   items; a reconciler (§3) merges and diffs them.
-2. **Attribution engine** — the §5 pipeline: bundle walk → BTM record →
-   `AssociatedBundleIdentifiers` (Team-ID-verified) → code signature → Apple's
-   `attributions.plist` → pkg receipt → curated catalog → label heuristic.
-   Cache by CDHash.
-3. **Health/diagnosis engine** — static checks (§7.4) always; log + launchctl +
-   crash-report joins (§7) for the boot audit; per-OS-version log-matcher table.
-4. **Action engine** — least-destructive-first disable, staged commit, undo
-   journal, quarantine with manifest, deny-list enforcement, deep-linking for
-   BTM/extension items it can't touch directly.
-5. **Curated catalog** — signed, updatable data file (Team ID + label-prefix →
-   product, purpose, category, safe-to-disable rating, consequence text), seeded
-   from `attributions.plist`.
+1. **Collectors** - one per source and OS capability. Each returns raw evidence
+   plus source, timestamp, collector/parser version, permissions, OS build,
+   confidence, parse warnings, and coverage status. Core and advanced collectors
+   remain visibly separate.
+2. **Reconciler/state model** - merges identities while preserving each source's
+   configured, registered, authorized, overridden, loaded, running, and observed
+   axes. It emits candidate explanations and conflicts, never destructive
+   conclusions from unmatched records alone.
+3. **Attribution engine** - collects all §5 signals, validates every executable
+   slice before reading signature metadata, and scores vendor and product
+   separately. Cache only CodeDirectory-derived and sealed-component metadata
+   keyed by the complete architecture/CDHash set. Hash the complete signature
+   blob or avoid caching CMS envelope, certificate-chain, and signing-time
+   fields. Re-evaluate code/resource validity,
+   revocation/notarization, Gatekeeper policy, filesystem identity, and
+   path/history evidence at the time of a safety decision
+   ([S-10](EVIDENCE.md#trust-attribution-and-privileged-actions)).
+4. **Evidence/diagnosis engine** - static risk signals plus bounded log,
+   launchd-diagnostic, incident-report, and optional prospective-event adapters.
+   Every conclusion carries evidence, confidence, observation window, and gaps.
+5. **Action engine** - enforces the immutable safety policy, exact target/domain,
+   action class, per-operation authorization, preview, journal, postcondition,
+   and tested undo. Unsupported mechanisms become guided actions.
+6. **Permission broker** - explains why each collector/action needs root or a
+   TCC permission, requests it only when used, and records denied/unavailable
+   coverage without nagging.
+7. **Curated catalog** - independently authored, provenance-carrying data with
+   the update security controls in §5. It can explain consequences but cannot
+   override trust classification or authorize actions.
 
-**UI shape:** default view **grouped by vendor (Team ID) → app → items** with
-real names and icons; two separate badges per item — **trust** (macOS /
-Identified developer / Unknown-unsigned) and **health** (OK / failing /
-orphaned); trigger chips explaining WHY it runs; disclosure showing label, plist
-path, signature line, and "installed by `<pkg>` on `<date>`"; search across
-name/vendor/label/bundle-ID/path; filters (third-party only, orphans,
-launches-at-login only). Every action is previewed, journaled, and undoable.
+**UI shape:** default view grouped by resolved vendor, app, and items, without
+assuming Team ID equals product. Show separate **provenance/trust**, **current
+state**, and **evidence** badges; trigger chips explain when and why an item can
+run. Disclosure includes every attribution source/conflict, label/domain, source
+path, validated signature, and wording such as "receipt X records this path"
+rather than "installed by X." A persistent coverage banner lists denied,
+unsupported, failed, or not-run collectors. Every available action shows its
+class, exact scope, consequence, evidence, journal location, and undo before
+authorization.
 
 ---
 
 ## 11. Phased roadmap
 
-- **Phase 0 — Hardware truth-pass.** Stand up 13/14/15/26 VMs and resolve the
-  §12 open questions (BTM schema per release, `statusForLegacyPlist` regression,
-  launchctl/BTM coupling, log-string corpus). Everything downstream depends on
-  this.
-- **Phase 1 — Read-only auditor (free tier).** launchd + BTM + long-tail
-  collectors, reconciliation, the attribution engine, static health checks,
-  grouped read-only UI, JSON/text export. No mutations. Ships value immediately
-  and validates the enumeration against real Macs.
-- **Phase 2 — Safe disable.** Privileged helper, override-DB disable + bootout
-  with staged commit and undo journal, quarantine, deny-list, deep-linking for
-  BTM/extension items, whack-a-mole messaging.
-- **Phase 3 — Boot audit & failure diagnosis.** Unified-log/launchctl/crash
-  correlation, the first-run boot audit annotating each item launched-OK /
-  failed / never-attempted, orphan cleanup. This is the founding-pain-point
-  feature and the headline differentiator.
-- **Phase 4 — Advanced.** Dialog attribution via Accessibility; "what changed"
-  monitor (Layers 1–2); estimated login-impact; curated-catalog expansion; an
-  optional Endpoint-Security "Pro" monitoring tier.
+- **Phase 0 - fixture and hardware truth-pass.** Build a golden corpus for every
+  collector and action. Test clean installs and upgrades on 13/14/15/26 VMs,
+  physical Apple-silicon Macs, and applicable Intel Macs; admin/standard and
+  multiple/fast-switched users; managed/unmanaged devices including supervised
+  DDM; SIP/FileVault/TCC/FDA states; offline volumes; and interrupted action,
+  crash, power-loss, update, undo, and recovery cases. Qualify macOS 27 preview
+  separately. Publish pass criteria and evidence by OS build.
+- **Phase 1A - core read-only auditor and minimum evidence audit.**
+  Canonical/arbitrary/managed launchd,
+  app-bundled services, BTM and classic login items, window restore, cron/at,
+  versioned periodic support, state reconciliation, attribution, risk signals,
+  opportunistic current-login evidence correlation, coverage report, and
+  redacted JSON/text export. No mutations and no helper; root-only sources show
+  as unavailable.
+- **Phase 1B - advanced read-only auditor.** Kext, system/app extension, HAL,
+  authorization, shell/SSH/PAM, SSO, Folder Actions, Quick Look/Spotlight, and
+  other published forensic collectors, each accurately trigger-labeled.
+- **Phase 2 - boot/login evidence and failure diagnosis.** Confidence-rated log,
+  launchd-diagnostic, incident-report, and static-signal correlation using §7's
+  safe states. Add optional prospective next-login observation for stronger
+  evidence.
+- **Phase 3 - constrained actions.** Ship only fixture-backed, behaviorally
+  reversible mechanisms with disclosed residue, the hardened helper, immutable
+  safety policy, staged launchd actions, durable root-owned journal/vault,
+  postcondition checks, restoration, and guided Settings/vendor/admin routes.
+  No generic orphan deletion.
+- **Phase 4 - opt-in advanced evidence.** Accessibility presenter attribution,
+  change monitoring, estimated login impact, catalog expansion, and only then a
+  separately justified Endpoint Security tier.
 
 ---
 
-## 12. Open questions — must verify on hardware
+## 12. Open questions and hardware validation
 
-These are the load-bearing uncertainties, all needing confirmation on real
-13/14/15/26 systems before code depends on them:
+These are the load-bearing uncertainties, all needing confirmation on clean and
+upgraded 13/14/15/26 systems before code depends on them:
 
-- **BTM schema per release** — exact `BackgroundItems-v<N>` numbers for every
-  point release (anchors confirmed: v4=13.0, v7=13.1, v8=14, v13=15.2, v16=26),
-  whether stale lower-version files coexist after upgrades, and whether DumpBTM
-  parses each.
-- **`launchctl disable` ↔ System Settings toggle coupling** — reported coupled
-  on 13/14 but no authoritative source documents the mechanism; test both
-  directions per OS, and whether BTM re-enables items disabled via `launchctl`.
-- **`SMAppService.statusForLegacyPlist(at:)`** — reportedly returns `.notFound`
-  for installed services since Sonoma 14.5; confirm current behavior and always
-  keep the `launchctl print-disabled` fallback.
-- **`sfltool dumpbtm` privileges** — root definitely; confirm whether the
-  invoking process also needs Full Disk Access on Sonoma+.
-- **SIP vs `launchctl disable system/com.apple.*`** — whether it's refused
-  outright with SIP on or silently ignored (drives the deny-list posture); and
-  the definitive per-release set of Apple services SIP blocks from bootout.
-- **Log access specifics** — `/private/var/db/diagnostics` permissions on
-  current macOS; re-confirm the standard-user "silently empty" failure mode on
-  Sequoia+; which subsystems the Enable-Private-Data profile actually unmasks.
-- **Log message corpus** — build a per-OS-build matcher table for the launchd/
-  BTM/loginwindow strings (`Service could not initialize`, `Service exited with
-  abnormal code: N`, `Pushing respawn out by`) via `log stream` on test VMs;
-  never hard-fail on a miss.
-- **Legacy cutoffs** — whether LoginHook still fires on Ventura 13 in all
-  configs; whether `/etc/emond.d` survives as inert cruft on in-place upgrades;
-  the macOS 15 "Legacy Background Tasks" toggle's exact scope (cron confirmed;
-  periodic/at unknown).
-- **Attribution details** — `AssociatedBundleIdentifiers` Team-ID enforcement
-  end-to-end (matched/mismatched/unsigned); `attributions.plist` schema
-  stability and the licensing of redistributing a snapshot.
-- **Ephemeral helper** — on which builds `unregister()` leaves stale enabled
-  entries in Login Items (reproduce before shipping the ephemeral mode).
-- **MAS viability** — whether even a read-only viewer using user-granted folder
-  access passes App Review (untestable without submission).
+- **BTM adapters:** active private store names/classes, coexistence of old
+  stores after upgrade, unknown fields/bits, `sfltool` output drift, and graceful
+  behavior when neither adapter works.
+- **State coupling:** both directions of launchd override, BTM authorization,
+  System Settings toggle, registration, and updater re-registration for each
+  item type and OS build. Do not assume one mirrors another.
+- **`statusForLegacyPlist`:** own legacy helper versus arbitrary third-party
+  paths, `.notFound` behavior, and whether any cross-app result remains useful.
+- **Permission matrix:** `sfltool`, private BTM archive, other users' agents and
+  crontabs, DiagnosticReports, unified log, App Management, and which binary is
+  TCC-responsible when a helper participates.
+- **Domain inventory:** user domains without GUI login, multiple login/audit
+  sessions, fast user switching, LoginWindow sessions, and exact placement of
+  `LimitLoadToSessionType` variants.
+- **Managed sources:** what local evidence and DDM status is available to an
+  unmanaged app for `services.background-task`, and how protected origins
+  appear in launchd/BTM on 15+.
+- **Log and report corpus:** per-build messages, fields, persistence/redaction,
+  report shapes, standard/admin behavior, and test fixtures for every safe §7
+  state. Never hard-fail or infer a historical negative from a miss.
+- **Legacy capability cutoffs:** `rc.*`, LoginHook/LogoutHook, emond, periodic,
+  cron/at, and the exact scope of Legacy Background Tasks on clean versus
+  upgraded systems.
+- **Attribution:** current validation behavior for associated bundle IDs,
+  conflicts after app transfer/update, local `attributions.plist` schema, and
+  legal approval before any redistribution or derived snapshot.
+- **Helper security/lifecycle:** enforcement of exact designated requirements
+  on macOS 13+, per-operation rights, approval flow, idle exit, unregister,
+  stale rows, update replacement, caller attacks, path races, and interrupted
+  journal/vault operations.
+- **Recovery:** Safe Mode behavior for each supported action and a documented
+  offline path that restores only BootCaptain-journaled changes without editing
+  launchd/BTM private databases.
+- **macOS 27:** rerun the complete matrix against preview builds; no production
+  support until the public release passes it.
+- **Distribution and licensing:** actual App Review outcome for any reduced MAS
+  build, and a project decision on the current Unlicense versus a paid,
+  proprietary, or dual-licensed product model.
 
 ---
 
-## 13. Sources
+## 13. Evidence policy and sources
 
-Primary and load-bearing references consulted (verified against live sources in
-a 2026-07 pass; treat any exact log/`sfltool` string as version-fragile):
+[`EVIDENCE.md`](EVIDENCE.md) maps the load-bearing reviewed claims to sources,
+confidence, and hardware work. Implementation PRs must update it with the exact
+URL/man-page version, access date, relevant quotation or reproduction command,
+tested OS build/hardware, result, and fixture. Source precedence is: public
+Apple API/schema or current man page; Apple deployment/security guidance;
+reproducible local observation/open-source implementation; independent research;
+forum or vendor anecdote. Private behavior never becomes a contract through
+repetition.
 
-- **Apple** — `launchd.plist(5)`, `launchctl(1)`, `log(1)`,
-  `backgroundtaskmanagementd(8)` man pages; ServiceManagement / `SMAppService`
-  docs incl. `statusForLegacyPlist(at:)` and the "Updating your app package
-  installer…" migration article; Endpoint Security docs (BTM events); Device
-  Management schema (`com.apple.servicemanagement`,
-  `apple/device-management` repo); Platform Security guide (SSV, SIP, cryptexes);
-  "Interpreting the JSON format of a crash report"; Apple Developer Forums
-  (AssociatedBundleIdentifiers Team-ID matching #713493/#717609; interpreter
-  "unidentified developer" #755904; `statusForLegacyPlist` regression #750685;
-  systemextensionsctl+SIP #773002/#685225; Legacy Background Tasks toggle
-  #756671; log entitlement #666679; exit-status threads #133915/#133504/#726826).
-- **Objective-See / Patrick Wardle** — DumpBTM (BTM store path, schema, type/
-  disposition flags, FDA requirement — the reference parser); KnockKnock
-  (persistence categories, GPL-3.0); BlockBlock; "Demystifying (& Bypassing)
-  macOS's Background Task Management" (DEF CON 31).
-- **Howard Oakley / eclecticlight.co** — "In the background: Identification"
-  (Feb 2026; `BackgroundItems-v16.btm`, `attributions.plist`, log subsystem);
-  "Manage Login and Background items" (Dec 2025); the 2023 Ventura BTM /
-  login-items series; unified-log access model.
-- **Csaba Fitzl / theevilbit** — "Beyond the good ol' LaunchAgents" persistence
-  series (the fullest public taxonomy); "macOS Service Management — the
-  SMAppService API."
-- **Rich Trouton / Der Flounder** — `sfltool dumpbtm`/`resetbtm`, MDM managed
-  login items, system-extension removal.
-- **osquery** — schema (`launchd`, `launchd_overrides`, `startup_items`,
-  `crontab`, `kernel_extensions`, `system_extensions`, `authorization_*`);
-  LICENSE (Apache-2.0 OR GPL-2.0); issue #5564 (`startup_items` broken on
-  modern macOS).
-- **Prior-art vendors** — soma-zone LaunchControl (release notes: BTM-state
-  display since v2.3, `fdautil`); Peter Borg Apps Lingon Pro; Etresoft
-  EtreCheck; MacPaw CleanMyMac; Nektony; FreeMacSoft AppCleaner.
+Key references accessed 2026-07-26:
 
-*Full per-dimension research notes (launchd, BTM/login-items, legacy-obscure,
-attribution/UX, safe-disable, prior-art, failure-diagnosis), each with its own
-key-facts, open-questions, and source lists, back this document.*
+- **launchd:** [`launchd.plist(5)`](https://keith.github.io/xcode-man-pages/launchd.plist.5.html), [`launchctl(1)`](https://keith.github.io/xcode-man-pages/launchctl.1.html), and [`backgroundtaskmanagementd(8)`](https://keith.github.io/xcode-man-pages/backgroundtaskmanagementd.8.html) from the Xcode man-page corpus.
+- **Login/background management:** Apple's [deployment guide](https://support.apple.com/guide/deployment/manage-login-items-background-tasks-mac-depdca572563/web), [Login Items & Extensions user guide](https://support.apple.com/guide/mac-help/change-login-items-extension-settings-mtusr003/mac), [SMAppService](https://developer.apple.com/documentation/servicemanagement/smappservice), and [helper migration guide](https://developer.apple.com/documentation/servicemanagement/updating-helper-executables-from-earlier-versions-of-macos).
+- **Managed tasks:** Apple's [DDM background-task guide](https://support.apple.com/guide/deployment/background-task-management-declarative-dep931381403/web) and the open [device-management schema](https://github.com/apple/device-management/blob/release/declarative/declarations/configurations/services.background-tasks.yaml).
+- **Security:** Apple's [Secure Coding Guide for helpers](https://developer.apple.com/library/archive/documentation/Security/Conceptual/SecureCodingGuide/DesigningSecureHelpers/DesigningSecureHelpers.html), [race-safe file operations](https://developer.apple.com/library/archive/documentation/Security/Conceptual/SecureCodingGuide/Articles/RaceConditions.html), [code-signing requirements](https://developer.apple.com/library/archive/documentation/Security/Conceptual/CodeSigningGuide/RequirementLang/RequirementLang.html), [Platform Security](https://support.apple.com/guide/security/welcome/web), [Safe Mode behavior](https://support.apple.com/en-us/116946), and [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/).
+- **Diagnostics:** Apple's [crash-report JSON guide](https://developer.apple.com/documentation/xcode/interpreting-the-json-format-of-a-crash-report), [`log(1)`](https://keith.github.io/xcode-man-pages/log.1.html), and Endpoint Security documentation for [BTM add events](https://developer.apple.com/documentation/endpointsecurity/es_event_btm_launch_item_add_t), [exec events](https://developer.apple.com/documentation/endpointsecurity/es_event_type_notify_exec), and [`seq_num`](https://developer.apple.com/documentation/endpointsecurity/es_message_t/seq_num).
+- **Legacy schedulers:** [`cron(8)`](https://keith.github.io/xcode-man-pages/cron.8.html), [`crontab(5)`](https://keith.github.io/xcode-man-pages/crontab.5.html), [`at(1)`](https://keith.github.io/xcode-man-pages/at.1.html), and the target OS's own man pages as the final authority.
+- **Open-source/reverse engineering:** Objective-See [DumpBTM](https://github.com/objective-see/DumpBTM), [KnockKnock](https://github.com/objective-see/KnockKnock), and Csaba Fitzl's [Beyond the good ol' LaunchAgents](https://theevilbit.github.io/beyond/).
+- **Independent research:** Howard Oakley's [In the background: Identification](https://eclecticlight.co/2026/02/20/in-the-background-identification/) and related BTM/log research; treat observed private details as build-specific.
+- **Telemetry/prior art:** osquery's merged [modern BTM `startup_items` PR #8726](https://github.com/osquery/osquery/pull/8726), [LaunchControl comparison](https://www.soma-zone.com/LaunchControl/comparison.html), and [Lingon product documentation](https://www.peterborgapps.com/lingon/). Vendor claims require fixture verification.
