@@ -11,8 +11,12 @@ final class ScanViewModel: ObservableObject {
     @Published var coverage: CoverageReport = CoverageReport()
     @Published var isScanning = false
     @Published var lastScan: Date?
-    @Published var searchText = ""
-    @Published var filter: Filter = .all
+    @Published var searchText = "" {
+        didSet { reconcileSelection() }
+    }
+    @Published var filter: Filter = .all {
+        didSet { reconcileSelection() }
+    }
     @Published var selection: StartupItem.ID?
 
     enum Filter: String, CaseIterable, Identifiable {
@@ -38,6 +42,7 @@ final class ScanViewModel: ObservableObject {
                 : raw
             await MainActor.run {
                 self.items = result.items
+                self.reconcileSelection()
                 self.coverage = result.coverage
                 self.isScanning = false
                 self.lastScan = Date()
@@ -47,9 +52,7 @@ final class ScanViewModel: ObservableObject {
 
     /// Items after search + filter, grouped by tier for the sidebar/list.
     var filteredItems: [StartupItem] {
-        items.filter { item in
-            matchesFilter(item) && matchesSearch(item)
-        }
+        items.filter(isDisplayed)
     }
 
     var groupedByTier: [(Mechanism.Tier, [StartupItem])] {
@@ -61,9 +64,22 @@ final class ScanViewModel: ObservableObject {
         }
     }
 
-    func item(id: StartupItem.ID?) -> StartupItem? {
+    func displayedItem(id: StartupItem.ID?) -> StartupItem? {
         guard let id else { return nil }
-        return items.first { $0.id == id }
+        return filteredItems.first { $0.id == id }
+    }
+
+    private func reconcileSelection() {
+        guard let selection else { return }
+        if !items.contains(where: {
+            $0.id == selection && isDisplayed($0)
+        }) {
+            self.selection = nil
+        }
+    }
+
+    private func isDisplayed(_ item: StartupItem) -> Bool {
+        matchesFilter(item) && matchesSearch(item)
     }
 
     private func matchesFilter(_ item: StartupItem) -> Bool {

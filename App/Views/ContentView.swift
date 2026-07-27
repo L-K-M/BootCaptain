@@ -17,8 +17,11 @@ struct ContentView: View {
         } detail: {
             if scan.isScanning && scan.items.isEmpty {
                 ScanningDetail()
-            } else if let item = scan.item(id: scan.selection) {
+            } else if let item = scan.displayedItem(id: scan.selection) {
                 ItemDetailView(item: item)
+                    .id(item.id)
+            } else if !scan.items.isEmpty && scan.filteredItems.isEmpty {
+                NoMatchesDetail()
             } else {
                 EmptyDetail(cleanupCount: cleanupCandidates.count,
                             showCleanup: $showCleanup)
@@ -29,6 +32,46 @@ struct ContentView: View {
         .sheet(isPresented: $showCleanup) {
             CleanupSheet(candidates: cleanupCandidates)
         }
+    }
+}
+
+private struct NoMatchesDetail: View {
+    @EnvironmentObject var scan: ScanViewModel
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 38))
+                .foregroundStyle(.secondary)
+            Text("No Matching Items").font(.title3.bold())
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 380)
+            Button(resetButtonTitle) {
+                scan.searchText = ""
+                scan.filter = .all
+            }
+            .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var message: String {
+        if scan.searchText.isEmpty {
+            return "No startup items match the \(scan.filter.rawValue.lowercased()) filter."
+        }
+        if scan.filter == .all {
+            return "Nothing matches \"\(scan.searchText)\"."
+        }
+        return "Nothing matches \"\(scan.searchText)\" in the \(scan.filter.rawValue.lowercased()) filter."
+    }
+
+    private var resetButtonTitle: String {
+        if scan.searchText.isEmpty { return "Clear Filter" }
+        if scan.filter == .all { return "Clear Search" }
+        return "Clear Search and Filters"
     }
 }
 
