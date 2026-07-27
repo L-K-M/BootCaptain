@@ -149,8 +149,10 @@ default:
       --no-redact    Do not redact user paths in exports
       --audit        Include diagnosis in `export`
 
-    Full coverage needs root (BTM, other users' agents) and Full Disk Access.
-    Run under sudo for the complete picture. On non-macOS this reports an empty
-    scan by design.
+    Coverage depends on the current user's permissions; `coverage` reports known
+    gaps. For privacy-protected sources, grant Full Disk Access to the terminal
+    that launches this CLI. Do not run under sudo: it changes the user and
+    launchd domains being inspected and does not grant Full Disk Access. On
+    non-macOS this reports an empty scan by design.
     """)
 }
