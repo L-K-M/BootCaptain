@@ -66,24 +66,32 @@ public struct LegacyCensusCollector: Collector {
         let path: String
         let mechanism: Mechanism
         let inert: Bool
+        let triggers: TriggerSet
         let note: String
         let isDirectory: Bool
     }
 
     let probes: [Probe] = [
         Probe(path: "/Library/StartupItems", mechanism: .startupItem, inert: true,
+              triggers: [],
               note: "SystemStarter was removed in OS X 10.10; contents are inert leftovers.", isDirectory: true),
         Probe(path: "/System/Library/StartupItems", mechanism: .startupItem, inert: true,
+              triggers: [],
               note: "Legacy StartupItems location; not executed on modern macOS.", isDirectory: true),
         Probe(path: "/etc/launchd.conf", mechanism: .launchdConf, inert: true,
+              triggers: [],
               note: "Ignored by launchd since OS X 10.10.", isDirectory: false),
         Probe(path: "/etc/emond.d/rules", mechanism: .emond, inert: false,
-              note: "emond was removed in Ventura; rules here are a red flag on modern macOS.", isDirectory: true),
+              triggers: [],
+              note: "Version-sensitive emond artifact; file presence does not establish an execution path on this macOS build.", isDirectory: true),
         Probe(path: "/etc/periodic", mechanism: .periodic, inert: false,
-              note: "periodic scripts; third-party scripts here run on schedule.", isDirectory: true),
+              triggers: [],
+              note: "Version-sensitive periodic artifact; file presence does not establish that a scheduler will run it on this macOS build.", isDirectory: true),
         Probe(path: "/Library/Audio/Plug-Ins/HAL", mechanism: .audioHALPlugin, inert: false,
+              triggers: [.speculative],
               note: "Audio HAL plug-ins load with coreaudiod at boot.", isDirectory: true),
         Probe(path: "/Library/Security/SecurityAgentPlugins", mechanism: .authorizationPlugin, inert: false,
+              triggers: [.speculative],
               note: "Runs at the login window; disabling wrongly can lock you out.", isDirectory: true),
     ]
 
@@ -107,7 +115,7 @@ public struct LegacyCensusCollector: Collector {
                     id: "\(probe.mechanism.rawValue):\(full)",
                     mechanism: probe.mechanism,
                     label: child, displayName: child, sourcePath: full,
-                    triggers: probe.inert ? [] : [.speculative],
+                    triggers: probe.triggers,
                     state: StateAxes(configured: .yes),
                     health: probe.inert ? .ok : .unknown,
                     isInert: probe.inert,
