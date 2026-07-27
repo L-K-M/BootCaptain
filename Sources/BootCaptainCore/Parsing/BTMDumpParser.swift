@@ -37,13 +37,6 @@ public struct BTMRecord: Sendable, Equatable {
     public var dispHidden: Bool { (dispositionRaw ?? 0) & 0x4 != 0 }
     public var dispNotified: Bool { (dispositionRaw ?? 0) & 0x8 != 0 }
 
-    /// PLAN.md §2.2: "will it run" is enabled AND allowed — never a single bit.
-    /// Returns nil when disposition was not observed.
-    public var willRun: Bool? {
-        guard dispositionRaw != nil else { return nil }
-        return dispEnabled && dispAllowed
-    }
-
     /// Maps the record's type bits to a `Mechanism`.
     public var mechanism: Mechanism {
         if isDaemon { return isLegacy ? .launchDaemon : .smAppServiceDaemon }

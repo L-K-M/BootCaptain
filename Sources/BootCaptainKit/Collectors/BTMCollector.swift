@@ -30,11 +30,10 @@ public struct BTMCollector: Collector {
         let mech = rec.mechanism
         let label = rec.identifier ?? rec.name ?? rec.uuid ?? "unknown"
 
-        var state = StateAxes(configured: .yes, registered: .yes)
-        if let willRun = rec.willRun {
-            state.authorized = Tristate(rec.dispAllowed)
-            state.override = willRun ? .absentDefault : .disabled
-        }
+        // Private BTM disposition bits are retained as evidence, but there is no
+        // documented effective-state formula. In particular they must not fill
+        // the independent launchd override or authorization axes.
+        let state = StateAxes(configured: .yes, registered: .yes)
 
         var attribution = ResolvedAttribution()
         if let dev = rec.developerName {
@@ -46,6 +45,11 @@ public struct BTMCollector: Collector {
         attribution.bundleIdentifier = rec.bundleIdentifier ?? rec.associatedBundleIDs.first
 
         let path = rec.executablePath ?? rec.url?.replacingOccurrences(of: "file://", with: "")
+
+        var notes = rec.teamIdentifier.map { ["Team ID (from BTM): \($0)"] } ?? []
+        if let disposition = rec.dispositionRaw {
+            notes.append("Private BTM disposition observed (\(disposition)); not used to derive effective state.")
+        }
 
         return StartupItem(
             id: "btm:\(rec.uuid ?? label)",
@@ -61,6 +65,6 @@ public struct BTMCollector: Collector {
                 collector: name, parserVersion: BTMDumpParser.version,
                 source: "sfltool dumpbtm", sourceQuality: .reproducible,
                 osBuild: ctx.osBuild, permissions: "root")],
-            notes: rec.teamIdentifier.map { ["Team ID (from BTM): \($0)"] } ?? [])
+            notes: notes)
     }
 }
