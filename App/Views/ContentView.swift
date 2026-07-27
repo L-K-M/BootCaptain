@@ -37,11 +37,11 @@ struct ContentView: View {
                 }
             }
             .toolbar { Toolbar(cleanupCount: cleanupCandidates.count, showCleanup: $showCleanup) }
+            .sheet(isPresented: $showCleanup) {
+                CleanupSheet(candidates: cleanupCandidates)
+            }
 
             CoverageBanner()
-        }
-        .sheet(isPresented: $showCleanup) {
-            CleanupSheet(candidates: cleanupCandidates)
         }
     }
 }
