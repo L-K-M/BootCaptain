@@ -165,6 +165,59 @@ final class ScanExportTests: XCTestCase {
         XCTAssertFalse(text.contains("/Users/alice"))
         XCTAssertTrue(text.contains("~/Library") || text.contains("/Users/<user>"))
     }
+
+    func testRedactedExportRemovesSensitiveIdentityAndCronCommand() throws {
+        let privateValue = "example-private-value"
+        let item = StartupItem(
+            id: "cron:/Volumes/Homes/alice/private-tab:7",
+            mechanism: .cron,
+            label: "/Volumes/Homes/alice/bin/job --credential \(privateValue)",
+            displayName: "cron: /Volumes/Homes/alice/bin/job",
+            sourcePath: "/Volumes/Homes/alice/private-tab",
+            notes: ["Command: /Volumes/Homes/alice/bin/job --credential \(privateValue)",
+                    "Runs at every reboot (@reboot)."])
+        let result = ScanResult(items: [item],
+            coverage: CoverageReport(collectors: []), generatedAt: 0)
+        let data = try ScanExport().json(
+            result, redact: true, homes: ["/Volumes/Homes/alice"])
+        let exported = try JSONDecoder().decode(ScanExport.ExportedScan.self, from: data)
+
+        XCTAssertEqual(exported.items[0].id, "item-1")
+        XCTAssertEqual(exported.items[0].displayName, "cron entry")
+        XCTAssertNil(exported.items[0].label)
+        XCTAssertEqual(exported.items[0].sourcePath, "~/private-tab")
+        XCTAssertTrue(exported.items[0].notes.isEmpty)
+        let text = String(data: data, encoding: .utf8)!
+        XCTAssertFalse(text.contains("alice"))
+        XCTAssertFalse(text.contains(privateValue))
+    }
+
+    func testRedactedExportDropsFreeFormNotesForEveryMechanism() throws {
+        let item = StartupItem(
+            id: "launchAgent:com.example.helper", mechanism: .launchAgent,
+            label: "com.example.helper", displayName: "Example Helper",
+            notes: ["  COMMAND: /usr/bin/helper --credential example-private-value",
+                    "Known vendor helper."])
+        let result = ScanResult(items: [item],
+            coverage: CoverageReport(collectors: []), generatedAt: 0)
+        let data = try ScanExport().json(result, redact: true)
+        let exported = try JSONDecoder().decode(ScanExport.ExportedScan.self, from: data)
+
+        XCTAssertTrue(exported.items[0].notes.isEmpty)
+    }
+
+    func testUnredactedExportPreservesLocalIdentity() throws {
+        let item = StartupItem(
+            id: "cron:/Users/alice/tab:1", mechanism: .cron,
+            label: "run-private-job", displayName: "cron: run-private-job")
+        let result = ScanResult(items: [item],
+            coverage: CoverageReport(collectors: []), generatedAt: 0)
+        let data = try ScanExport().json(result, redact: false)
+        let exported = try JSONDecoder().decode(ScanExport.ExportedScan.self, from: data)
+
+        XCTAssertEqual(exported.items[0].id, item.id)
+        XCTAssertEqual(exported.items[0].label, item.label)
+    }
 }
 
 final class AttributionEngineHelperTests: XCTestCase {

@@ -34,13 +34,13 @@ public struct ScanExport: Sendable {
     }
 
     public func json(_ result: ScanResult, redact: Bool = true, homes: [String] = []) throws -> Data {
-        let items = result.items.map { item in
+        let items = result.items.enumerated().map { index, item in
             ExportedItem(
-                id: item.id,
+                id: redact ? "item-\(index + 1)" : item.id,
                 mechanism: item.mechanism.rawValue,
                 tier: item.mechanism.tier.rawValue,
-                displayName: item.displayName,
-                label: item.label,
+                displayName: redact ? redactedDisplayName(item, homes: homes) : item.displayName,
+                label: redact ? redactedLabel(item, homes: homes) : item.label,
                 sourcePath: redact ? redactPath(item.sourcePath, homes: homes) : item.sourcePath,
                 triggers: item.triggerChips,
                 trust: item.trust.rawValue,
@@ -51,7 +51,10 @@ public struct ScanExport: Sendable {
                 vendor: item.attribution.vendorName,
                 product: item.attribution.productName,
                 teamID: item.attribution.teamIdentifier,
-                notes: redact ? item.notes.map { redactAllPaths($0, homes: homes) } : item.notes)
+                // Notes are free-form collector text and can contain commands,
+                // arguments, credentials, or paths. A share-redacted export
+                // cannot safely preserve them without a structured allowlist.
+                notes: redact ? [] : item.notes)
         }
         let scan = ExportedScan(
             generatedAt: result.generatedAt,
@@ -67,6 +70,16 @@ public struct ScanExport: Sendable {
     func redactPath(_ path: String?, homes: [String]) -> String? {
         guard let path else { return nil }
         return redactAllPaths(path, homes: homes)
+    }
+
+    func redactedDisplayName(_ item: StartupItem, homes: [String]) -> String {
+        if item.mechanism == .cron { return "cron entry" }
+        return redactAllPaths(item.displayName, homes: homes)
+    }
+
+    func redactedLabel(_ item: StartupItem, homes: [String]) -> String? {
+        guard item.mechanism != .cron, let label = item.label else { return nil }
+        return redactAllPaths(label, homes: homes)
     }
 
     func redactAllPaths(_ text: String, homes: [String]) -> String {
