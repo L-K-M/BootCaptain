@@ -12,23 +12,34 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            Sidebar()
-        } detail: {
-            if scan.isScanning && scan.items.isEmpty {
-                ScanningDetail()
-            } else if let item = scan.displayedItem(id: scan.selection) {
-                ItemDetailView(item: item)
-                    .id(item.id)
-            } else if !scan.items.isEmpty && scan.filteredItems.isEmpty {
-                NoMatchesDetail()
-            } else {
-                EmptyDetail(cleanupCount: cleanupCandidates.count,
-                            showCleanup: $showCleanup)
+        // The banner is a sibling of the split view rather than a
+        // `.safeAreaInset(edge: .bottom)` on it. On macOS NavigationSplitView
+        // bridges to an NSSplitViewController whose columns are separate view
+        // controllers, and a safe-area inset applied outside it does not reach
+        // the sidebar column's scroll view: the List keeps sizing itself to the
+        // full window height, so its last rows and its scroller thumb run under
+        // the banner and cannot be reached. Stacking gives the banner real
+        // layout space that both columns end above.
+        VStack(spacing: 0) {
+            NavigationSplitView {
+                Sidebar()
+            } detail: {
+                if scan.isScanning && scan.items.isEmpty {
+                    ScanningDetail()
+                } else if let item = scan.displayedItem(id: scan.selection) {
+                    ItemDetailView(item: item)
+                        .id(item.id)
+                } else if !scan.items.isEmpty && scan.filteredItems.isEmpty {
+                    NoMatchesDetail()
+                } else {
+                    EmptyDetail(cleanupCount: cleanupCandidates.count,
+                                showCleanup: $showCleanup)
+                }
             }
+            .toolbar { Toolbar(cleanupCount: cleanupCandidates.count, showCleanup: $showCleanup) }
+
+            CoverageBanner()
         }
-        .toolbar { Toolbar(cleanupCount: cleanupCandidates.count, showCleanup: $showCleanup) }
-        .safeAreaInset(edge: .bottom) { CoverageBanner() }
         .sheet(isPresented: $showCleanup) {
             CleanupSheet(candidates: cleanupCandidates)
         }
