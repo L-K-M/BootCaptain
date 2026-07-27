@@ -1,9 +1,8 @@
 import SwiftUI
 import BootCaptainCore
 
-/// The built-in "Clean Up" flow: broken and orphaned startup leftovers, with a
-/// reversible one-click fix. User-owned items are moved by the app; system
-/// (`/Library`) items are moved by the privileged helper after admin approval.
+/// Review flow for broken startup leftovers. Nothing is preselected; helper-
+/// backed actions require a separate prototype warning and confirmation.
 /// Already-cleaned items are excluded, so repeated runs never re-attempt them.
 struct CleanupSheet: View {
     let candidates: [CleanupPlanner.Candidate]
@@ -13,6 +12,7 @@ struct CleanupSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var selected: Set<String> = []
     @State private var didInit = false
+    @State private var showAdminConfirmation = false
 
     /// Candidates that have not already been cleaned this session.
     private var pending: [CleanupPlanner.Candidate] {
@@ -27,6 +27,9 @@ struct CleanupSheet: View {
     /// Selected IDs that are still pending (stale selections drop out).
     private var effectiveSelection: [CleanupPlanner.Candidate] {
         pending.filter { selected.contains($0.itemID) }
+    }
+    private var includesSystemSelection: Bool {
+        effectiveSelection.contains { $0.eligibility == .requiresHelper }
     }
 
     var body: some View {
@@ -46,10 +49,17 @@ struct CleanupSheet: View {
             footer
         }
         .frame(width: 560, height: 540)
+        .interactiveDismissDisabled(cleanup.isWorking)
         .onAppear {
             guard !didInit else { return }
             didInit = true
-            selected = Set(pending.map(\.itemID))
+            selected = []
+        }
+        .alert("Experimental Administrator Action", isPresented: $showAdminConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Continue", role: .destructive) { performSelection() }
+        } message: {
+            Text("This helper-backed vault move has not completed BootCaptain's on-device authorization, interruption, and recovery qualification. Continue only if you are deliberately testing this prototype.")
         }
     }
 
@@ -58,8 +68,8 @@ struct CleanupSheet: View {
             Image(systemName: "bandage.fill")
                 .font(.system(size: 26)).foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Clean Up Broken Startup Items").font(.title3.bold())
-                Text("Leftovers that can't run anymore — the usual source of mystery login errors.")
+                Text("Review Broken Startup Items").font(.title3.bold())
+                Text("Review the evidence and choose each item you want BootCaptain to change.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
@@ -69,8 +79,8 @@ struct CleanupSheet: View {
 
     private var userSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Fix now (reversible)").font(.headline)
-            Text("Moved to BootCaptain's vault — nothing is deleted, and every change can be undone.")
+            Text("Current-user items").font(.headline)
+            Text("LaunchAgent files move to a vault. Login item records are removed through System Events and restoration is best-effort. In-app undo history lasts only for this session.")
                 .font(.caption).foregroundStyle(.secondary)
             ForEach(userActionable) { row($0) }
         }
@@ -80,7 +90,7 @@ struct CleanupSheet: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("System items — needs administrator approval", systemImage: "lock.shield")
                 .font(.headline)
-            Text("These live in /Library and need root. BootCaptain's helper asks for admin approval once, then moves them to a protected, reversible vault. Nothing is deleted.")
+            Text("These live in /Library and require helper registration plus administrator approval. This prototype path has not completed its authorization, interruption, or recovery qualification.")
                 .font(.caption).foregroundStyle(.secondary)
             ForEach(systemActionable) { row($0) }
         }
@@ -136,16 +146,17 @@ struct CleanupSheet: View {
             Spacer()
             Button("Close") { dismiss() }
                 .keyboardShortcut(.cancelAction)
+                .disabled(cleanup.isWorking)
             Button {
-                Task {
-                    await cleanup.perform(effectiveSelection, helper: helper)
-                    scan.scan(diagnose: false)
+                if includesSystemSelection {
+                    showAdminConfirmation = true
+                } else {
+                    performSelection()
                 }
             } label: {
                 let n = effectiveSelection.count
-                Text(n == 0 ? "Clean Up" : "Clean Up \(n) Item\(n == 1 ? "" : "s")")
+                Text(n == 0 ? "Select Items" : "Apply to \(n) Item\(n == 1 ? "" : "s")")
             }
-            .keyboardShortcut(.defaultAction)
             .disabled(effectiveSelection.isEmpty || cleanup.isWorking)
         }
         .padding(16)
@@ -155,5 +166,13 @@ struct CleanupSheet: View {
         Binding(
             get: { selected.contains(id) },
             set: { on in if on { selected.insert(id) } else { selected.remove(id) } })
+    }
+
+    private func performSelection() {
+        let selection = effectiveSelection
+        Task {
+            await cleanup.perform(selection, helper: helper)
+            scan.scan(diagnose: false)
+        }
     }
 }

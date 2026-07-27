@@ -16,9 +16,9 @@ struct ItemDetailView: View {
 
     private func cleanupButtonTitle(_ c: CleanupPlanner.Candidate) -> String {
         switch c.eligibility {
-        case .userVaultMove: return "Move to Vault (reversible)"
-        case .loginItemRemoval: return "Remove Login Item (undoable)"
-        case .requiresHelper: return "Move to Vault (admin, reversible)"
+        case .userVaultMove: return "Move LaunchAgent File to Vault"
+        case .loginItemRemoval: return "Remove Login Item (session undo)"
+        case .requiresHelper: return "Review Administrator Action"
         }
     }
 
@@ -104,24 +104,30 @@ struct ItemDetailView: View {
             // Built-in cleanup for provably-broken items the user can fix
             // without root: reversible vault move / login-item removal.
             if let candidate = cleanupCandidate, !cleanup.completedItemIDs.contains(candidate.itemID) {
-                HStack {
-                    Button {
-                        Task {
-                            await cleanup.perform([candidate], helper: helper)
-                            actionMessage = cleanup.performed.last?.outcome.message
-                            scan.scan(diagnose: false)
+                if candidate.eligibility == .requiresHelper {
+                    Text(cleanupButtonTitle(candidate))
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                    Text("Open Clean Up from the toolbar to see the prototype warning and explicitly confirm any helper-backed action.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    HStack {
+                        Button {
+                            Task {
+                                await cleanup.perform([candidate], helper: helper)
+                                actionMessage = cleanup.performed.last?.outcome.message
+                                scan.scan(diagnose: false)
+                            }
+                        } label: {
+                            Label(cleanupButtonTitle(candidate), systemImage: "bandage.fill")
                         }
-                    } label: {
-                        Label(cleanupButtonTitle(candidate), systemImage: "bandage.fill")
+                        .buttonStyle(.borderedProminent).tint(.orange)
+                        .disabled(cleanup.isWorking)
+                        if cleanup.isWorking { ProgressView().controlSize(.small) }
                     }
-                    .buttonStyle(.borderedProminent).tint(.orange)
-                    .disabled(cleanup.isWorking)
-                    if cleanup.isWorking { ProgressView().controlSize(.small) }
+                    Text("\(candidate.reason) In-app undo history lasts only for this session.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Text(candidate.eligibility == .requiresHelper
-                     ? "\(candidate.reason) BootCaptain's helper will ask for administrator approval, then move it to a protected, reversible vault."
-                     : candidate.reason)
-                    .font(.caption).foregroundStyle(.secondary)
                 Divider().padding(.vertical, 2)
             }
             switch item.actionClass {
