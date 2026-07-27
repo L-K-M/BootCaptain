@@ -190,9 +190,15 @@ final class AttributionScorerTests: XCTestCase {
 }
 
 final class CatalogTests: XCTestCase {
-    func testTeamIDMatch() {
+    func testTeamIDAloneDoesNotIdentifyProduct() {
         let e = Catalog.seed.match(teamID: "9BNSXJN65R", label: nil)
-        XCTAssertEqual(e?.vendor, "Docker")
+        XCTAssertNil(e)
+    }
+
+    func testTeamIDAndLabelMatch() {
+        let e = Catalog.seed.match(
+            teamID: "9BNSXJN65R", label: "com.docker.vmnetd")
+        XCTAssertEqual(e?.product, "Docker Desktop")
     }
 
     func testLongestPrefixWins() {
@@ -202,6 +208,18 @@ final class CatalogTests: XCTestCase {
 
     func testNoMatchReturnsNil() {
         XCTAssertNil(Catalog.seed.match(teamID: "NONE", label: "org.unknown.thing"))
+    }
+
+    func testPrefixRequiresComponentBoundary() {
+        XCTAssertNil(Catalog.seed.match(teamID: nil, label: "com.dropboxevil.agent"))
+        XCTAssertEqual(
+            Catalog.seed.match(teamID: nil, label: "com.dropbox.agent")?.product,
+            "Dropbox")
+    }
+
+    func testTeamIDRejectsConflictingLabelCandidate() {
+        XCTAssertNil(Catalog.seed.match(
+            teamID: "WRONGTEAM", label: "com.docker.vmnetd"))
     }
 }
 
