@@ -15,3 +15,5 @@ When working on a pull request, evaluate each review comment on its merits:
 
 Human review is mandatory for helper, XPC, mutation, authorization, entitlement,
 signing, and release changes. GLM review is an additional signal, not approval.
+
+The number of tokens used to edit files is best minimized, all else being equal. Therefore, when it will not affect the end result, try to surgically edit a file rather than rewrite the entire thing.
