@@ -1,3 +1,5 @@
+@AGENTS.md
+
 # Claude guidance
 
 Follow [AGENTS.md](AGENTS.md), especially its safety rules for privileged
