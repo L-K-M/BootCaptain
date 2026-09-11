@@ -7,6 +7,9 @@ evidence behind failed startup items. The intended product is the concrete
 answer to a vague *"Could not open file"* login dialog; the current prototype
 does not yet provide exhaustive or release-qualified answers.
 
+> [!IMPORTANT]
+> LLM disclosure: This codebase was written with substantial help from large language models: AI coding agents working from the [`AGENTS.md`](AGENTS.md) brief in this repo.
+
 Current source version: **<!-- version -->0.1.0<!-- /version -->** (research prototype).
 
 **Latest release:** [GitHub Releases](https://github.com/L-K-M/BootCaptain/releases/latest) (available after the first release-qualified build).
