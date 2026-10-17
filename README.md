@@ -14,6 +14,13 @@ Current source version: **<!-- version -->0.1.0<!-- /version -->** (research pro
 
 **Latest release:** [GitHub Releases](https://github.com/L-K-M/BootCaptain/releases/latest) (available after the first release-qualified build).
 
+The app is ad-hoc signed and not notarized. After moving **BootCaptain** to
+Applications, run:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/BootCaptain.app"
+```
+
 ![BootCaptain icon](App/Assets.xcassets/AppIcon.appiconset/icon_128x128@2x.png)
 
 [`PLAN.md`](PLAN.md) is the product and architecture contract;
